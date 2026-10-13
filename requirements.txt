@@ -2,3 +2,5 @@ ultralytics==8.4.175
 aiohttp==3.14.5
 numpy==2.5.4
 lap==0.5.13
+anthropic==1.13.0
+piper-tts==1.8.0

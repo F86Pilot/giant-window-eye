@@ -56,6 +56,7 @@ DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "data"))  # saved calib
 # ---- Shared state between the camera thread and the web server ------------
 state = {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None}
 debug_jpeg = None
+clean_frame = None   # newest camera picture without boxes drawn on it (the voice takes photos from it)
 lock = threading.Lock()
 
 
@@ -159,7 +160,7 @@ def detect_loop():
 
 
 def _detect_loop(model, camera):
-    global debug_jpeg
+    global debug_jpeg, clean_frame
     confirmed = {}          # person ID -> last time seen, for people sure enough to follow
     last_print = 0
     following = None        # ID number of the person the eye is locked onto
@@ -224,6 +225,10 @@ def _detect_loop(model, camera):
         with lock:
             state.update(new)
 
+        # Keep a clean copy for the voice's photos; the boxes below are drawn on a copy.
+        clean_frame = frame
+        frame = frame.copy()
+
         # Debug picture: everyone in green, the followed person in yellow, aim point as a red dot,
         # ignored spots as gray outlines.
         for z in ignore_zones.zones:
@@ -275,6 +280,8 @@ async def cal_ws_handler(request):
     cal_clients.add(ws)
     print("Calibration page connected")
     await ws.send_str(json.dumps({"type": "settings", "schema": SCHEMA, "values": settings.values}))
+    if voice:
+        await ws.send_str(json.dumps(voice.hello()))
     try:
         async for m in ws:
             try:
@@ -282,7 +289,10 @@ async def cal_ws_handler(request):
             except (TypeError, ValueError):
                 continue
             kind = msg.get("type")
-            if kind == "aim":
+            if isinstance(kind, str) and kind.startswith("voice_"):
+                if voice:
+                    await voice.handle(msg)
+            elif kind == "aim":
                 manual.update(on=True, x=float(msg["x"]), y=float(msg["y"]))
             elif kind == "release":
                 manual["on"] = False
@@ -423,6 +433,29 @@ async def calibrate_page(request):
 
 async def start_background(app):
     app["broadcast"] = asyncio.create_task(broadcast())
+    if voice:
+        app["voice"] = asyncio.create_task(voice.run())
+
+
+# ---- Voice (voice.py): funny lines to passersby, played on the phone page -------
+voice = None
+
+
+def start_voice():
+    """The voice is optional: if it can't start, the eye carries on without it."""
+    global voice
+    try:
+        from voice import Voice
+
+        def read_person():
+            with lock:
+                return {"present": state["present"], "id": state["id"], "box": state["box"]}
+
+        voice = Voice(DATA_DIR, read_person, lambda: clean_frame,
+                      lambda msg: send_all(cal_clients, json.dumps(msg)))
+    except Exception:
+        traceback.print_exc()
+        print("Voice couldn't start; the eye runs without it")
 
 
 def main():
@@ -433,6 +466,7 @@ def main():
     calibration = Calibration(os.path.join(DATA_DIR, "calibration.json"))
     ignore_zones = IgnoreZones(os.path.join(DATA_DIR, "ignore_zones.json"))
     settings = Settings(os.path.join(DATA_DIR, "settings.json"))
+    start_voice()
     threading.Thread(target=detect_loop, daemon=True).start()
     app = web.Application()
     app.on_startup.append(start_background)
@@ -442,6 +476,9 @@ def main():
     app.router.add_get("/calws", cal_ws_handler)
     app.router.add_get("/debug", debug_page)
     app.router.add_get("/debug.mjpg", debug_stream)
+    if voice:
+        app.router.add_get("/voice/audio/{n}", voice.audio_handler)
+        app.router.add_get("/voice/preview", voice.preview_handler)
     app.router.add_static("/", "web")
     print(f"Web server started on port {PORT} (detecting on {DEVICE}, {DETECT_SIZE}px)")
     web.run_app(app, port=PORT, print=None)
@@ -450,7 +487,7 @@ def main():
 def restart_when_code_changes():
     """When running as a background service, quit if a program file is updated;
     the service starts it again right away with the new code (no password needed)."""
-    files = [os.path.join(HERE, f) for f in ("tracker.py", "calibration.py", "settings.py")]
+    files = [os.path.join(HERE, f) for f in ("tracker.py", "calibration.py", "settings.py", "voice.py")]
     stamp = lambda: [os.path.getmtime(f) for f in files]
     start = stamp()
     while True:
