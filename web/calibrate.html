@@ -1,0 +1,350 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Giant Eye Controls</title>
+<style>
+  :root { --bg: #111; --panel: #1c1c1c; --text: #eee; --dim: #999; --accent: #ff8a3d; --ok: #5c5; --bad: #e66; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, system-ui, sans-serif;
+         padding: 12px 16px 40px; max-width: 520px; margin-inline: auto; -webkit-user-select: none; user-select: none; }
+  h1 { font-size: 20px; margin: 4px 0 8px; }
+  .cam { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16/9; object-fit: contain; display: block; }
+  .status { margin: 8px 0 12px; padding: 8px 10px; border-radius: 8px; background: var(--panel); font-size: 15px; }
+  .status b.ok { color: var(--ok); } .status b.bad { color: var(--bad); }
+  .pad { position: relative; width: 100%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(#2a2a2a, #161616);
+         border: 2px solid #333; touch-action: none; margin: 4px 0 12px; }
+  .pad.active { border-color: var(--accent); }
+  .pad .cross { position: absolute; inset: 0; pointer-events: none; }
+  .pad .cross::before, .pad .cross::after { content: ""; position: absolute; background: #2c2c2c; }
+  .pad .cross::before { left: 50%; top: 0; bottom: 0; width: 1px; }
+  .pad .cross::after { top: 50%; left: 0; right: 0; height: 1px; }
+  .dot { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+         background: var(--accent); box-shadow: 0 0 12px var(--accent); pointer-events: none; }
+  .pad .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+               text-align: center; padding: 20%; color: var(--dim); pointer-events: none; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 14px; width: 100%; margin: 0 0 10px;
+           background: #333; color: var(--text); }
+  button.primary { background: var(--accent); color: #000; font-weight: 600; }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 10px; } .row button { flex: 1; }
+  .toast { min-height: 1.4em; text-align: center; margin: 0 0 10px; }
+  .toast.ok { color: var(--ok); } .toast.bad { color: var(--bad); }
+  h2 { font-size: 16px; margin: 18px 0 6px; color: var(--dim); font-weight: 600; }
+  ol { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; align-items: center; justify-content: space-between; background: var(--panel);
+       border-radius: 8px; padding: 6px 6px 6px 12px; margin-bottom: 6px; font-size: 14px; }
+  li button { width: auto; margin: 0; padding: 6px 12px; background: #2a2a2a; }
+  .help { color: var(--dim); font-size: 14px; }
+  .react { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .react button { margin: 0; }
+
+  /* tabs */
+  .tabs { display: flex; gap: 6px; margin: 0 0 12px; position: sticky; top: 0; z-index: 5;
+          background: var(--bg); padding: 6px 0; }
+  .tabs button { margin: 0; padding: 12px 6px; background: var(--panel); color: var(--dim); font-weight: 600; }
+  .tabs button.on { background: var(--accent); color: #000; }
+  .tab { display: none; } .tab.on { display: block; }
+
+  /* settings */
+  details { background: var(--panel); border-radius: 10px; margin-bottom: 10px; }
+  summary { padding: 14px; font-weight: 600; cursor: pointer; }
+  .set { padding: 4px 14px 14px; border-top: 1px solid #2a2a2a; }
+  .set-top { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+  .set-top .label { flex: 1; }
+  .set-top .val { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 3.5em; text-align: right; }
+  .set-top .reset { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; background: #2a2a2a; }
+  .set-top .reset.hidden { visibility: hidden; }
+  .set-ctl { display: flex; align-items: center; gap: 8px; }
+  .set-ctl .step { width: 52px; height: 48px; margin: 0; padding: 0; font-size: 24px; flex: none; touch-action: manipulation; }
+  input[type=range] { flex: 1; height: 48px; margin: 0; accent-color: var(--accent); touch-action: pan-y; }
+  input[type=range]::-webkit-slider-thumb { width: 30px; height: 30px; }
+  .set .help { margin: 6px 0 0; font-size: 13px; }
+  .switch { position: relative; width: 58px; height: 34px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch span { position: absolute; inset: 0; background: #444; border-radius: 34px; transition: .2s; }
+  .switch span::before { content: ""; position: absolute; width: 26px; height: 26px; left: 4px; top: 4px;
+                         background: #fff; border-radius: 50%; transition: .2s; }
+  .switch input:checked + span { background: var(--accent); }
+  .switch input:checked + span::before { transform: translateX(24px); }
+</style>
+<script src="config.js"></script>
+</head>
+<body>
+<h1>Giant Eye controls</h1>
+<img class="cam" src="/debug.mjpg" alt="Camera view">
+<div class="status" id="status">Connecting…</div>
+
+<div class="tabs">
+  <button data-tab="aim" class="on">Aim</button>
+  <button data-tab="settings">Settings</button>
+  <button data-tab="test">Test</button>
+</div>
+
+<div class="tab on" id="tab-aim">
+<div class="pad" id="pad"><div class="cross"></div><div class="dot" id="dot"></div>
+  <div class="hint" id="hint">Tap “Aim the eye”, then drag here to steer it</div></div>
+
+<div class="toast" id="toast"></div>
+<button class="primary" id="aimBtn">Aim the eye</button>
+<div class="row">
+  <button id="centerBtn">Re-center</button>
+  <button id="saveBtn" disabled>Save this spot</button>
+</div>
+
+<h2>Not a person?</h2>
+<p class="help" style="margin-top:0">If the yellow box is on something that isn't a person (like the mailbox),
+  tap this and the eye will ignore that spot from now on.</p>
+<button id="ignoreBtn" disabled>Ignore what's in the yellow box</button>
+<button id="clearIgnoreBtn">Clear ignored spots</button>
+
+<h2 id="spotsTitle">Saved spots</h2>
+<ol id="spots"></ol>
+<button id="clearBtn">Clear all spots</button>
+
+<p class="help">
+  <b>How to:</b> stand somewhere in the yard. Tap <b>Aim the eye</b>, then drag on the circle until the eye
+  is looking right at you (a helper watching from the street makes this easier). Tap <b>Save this spot</b>.
+  The eye goes back to following you with the improved aim. Repeat at 4–6 spots: left, middle, right, near and far.
+  <br><br>The yellow box in the camera view is the person the eye follows. Make sure it's you.
+</p>
+</div>
+
+<div class="tab" id="tab-settings">
+  <p class="help" style="margin-top:0">Changes show on the eye right away and are saved.
+    <b>Reset</b> puts a setting back to its default.</p>
+  <div id="settings">Loading…</div>
+</div>
+
+<div class="tab" id="tab-test">
+  <h2 style="margin-top:0">Test reactions</h2>
+  <p class="help" style="margin-top:0">Makes the real eye (TV or iPad) react right now.</p>
+  <div class="react">
+    <button data-react="sleep">😴 Sleep</button>
+    <button data-react="startle">😱 Startle</button>
+    <button data-react="roll">🙄 Eye roll</button>
+    <button data-react="doubletake">👀 Double-take</button>
+    <button data-react="blink">Blink</button>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let ws, aiming = false, aim = { x: 0, y: 0 }, last = null, sendTimer = null;
+
+// Drag sensitivity: dragging across the whole circle moves the eye this many "eye widths".
+// Lower = finer control.
+const SENSITIVITY = 1.0;
+
+function connect() {
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/calws');
+  ws.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'status') showStatus(m);
+    if (m.type === 'settings') showSettings(m);
+    if (m.type === 'saved') {
+      toast(m.msg, m.ok);
+      if (m.ok) setAiming(false);
+    }
+  };
+  ws.onclose = () => { $('status').textContent = 'Lost connection, retrying…'; setAiming(false); setTimeout(connect, 1500); };
+}
+const send = obj => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+
+function showStatus(m) {
+  last = m;
+  const p = m.person;
+  $('status').innerHTML = p
+    ? `<b class="ok">Camera sees person #${p.id}</b> &nbsp;(left-right ${p.x.toFixed(2)}, size ${p.size.toFixed(2)})`
+    : `<b class="bad">Camera can't see anyone</b>`;
+  $('saveBtn').disabled = !(aiming && p);
+  $('ignoreBtn').disabled = !p;
+  $('clearIgnoreBtn').textContent = `Clear ignored spots (${m.ignored || 0})`;
+  $('spotsTitle').textContent = `Saved spots (${m.points.length})`;
+  const html = m.points.map((q, i) =>
+    `<li><span>${i + 1}. left-right ${q.x.toFixed(2)}, size ${q.size.toFixed(2)}</span>` +
+    `<button data-i="${i}">Delete</button></li>`).join('');
+  if ($('spots').innerHTML !== html) $('spots').innerHTML = html;
+  if (!aiming && m.predicted) { aim.x = m.predicted[0]; aim.y = m.predicted[1]; drawDot(); }
+}
+
+function setAiming(on) {
+  aiming = on;
+  $('pad').classList.toggle('active', on);
+  $('hint').style.display = on ? 'none' : 'flex';
+  $('aimBtn').textContent = on ? 'Stop aiming (eye follows camera)' : 'Aim the eye';
+  $('aimBtn').classList.toggle('primary', !on);
+  $('saveBtn').classList.toggle('primary', on);
+  $('saveBtn').disabled = !(on && last && last.person);
+  if (on) send({ type: 'aim', x: aim.x, y: aim.y }); else send({ type: 'release' });
+}
+
+function clampDisc(p) { const d = Math.hypot(p.x, p.y); if (d > 1) { p.x /= d; p.y /= d; } }
+function drawDot() {
+  // the pad shows the eye: center = looking straight out, edge = as far as it can look
+  $('dot').style.left = (50 + aim.x * 50) + '%';
+  $('dot').style.top = (50 + aim.y * 50) + '%';
+}
+function sendAimSoon() {
+  if (sendTimer) return;
+  sendTimer = setTimeout(() => { sendTimer = null; send({ type: 'aim', x: aim.x, y: aim.y }); }, 50);
+}
+
+// Drag works like a laptop trackpad: it moves the dot relative to where it is,
+// so you can make small, precise adjustments.
+let drag = null;
+$('pad').addEventListener('pointerdown', e => {
+  if (!aiming) return;
+  drag = { x: e.clientX, y: e.clientY };
+  $('pad').setPointerCapture(e.pointerId);
+});
+$('pad').addEventListener('pointermove', e => {
+  if (!drag) return;
+  const w = $('pad').clientWidth;
+  aim.x += (e.clientX - drag.x) / w * 2 * SENSITIVITY;
+  aim.y += (e.clientY - drag.y) / w * 2 * SENSITIVITY;
+  clampDisc(aim);
+  drag = { x: e.clientX, y: e.clientY };
+  drawDot();
+  sendAimSoon();
+});
+const endDrag = () => { drag = null; };
+$('pad').addEventListener('pointerup', endDrag);
+$('pad').addEventListener('pointercancel', endDrag);
+
+$('aimBtn').onclick = () => setAiming(!aiming);
+$('centerBtn').onclick = () => { aim = { x: 0, y: 0 }; drawDot(); if (aiming) send({ type: 'aim', x: 0, y: 0 }); };
+$('saveBtn').onclick = () => send({ type: 'save' });
+$('ignoreBtn').onclick = () => {
+  if (confirm("Ignore whatever is in the yellow box from now on? (Only do this if it's not a person.)")) send({ type: 'ignore' });
+};
+$('clearIgnoreBtn').onclick = () => { if (confirm('Stop ignoring all spots?')) send({ type: 'clear_ignore' }); };
+document.querySelector('.react').onclick = e => {
+  const b = e.target.closest('button');
+  if (b) { send({ type: 'react', action: b.dataset.react }); toast(b.textContent + ' sent', true); }
+};
+$('clearBtn').onclick = () => { if (confirm('Delete all saved spots and start over?')) send({ type: 'clear' }); };
+$('spots').onclick = e => { const i = e.target.dataset.i; if (i !== undefined) send({ type: 'delete', index: +i }); };
+
+let toastTimer;
+function toast(text, ok) {
+  $('toast').textContent = text;
+  $('toast').className = 'toast ' + (ok ? 'ok' : 'bad');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 4000);
+}
+
+// ---- Tabs ---------------------------------------------------------------------
+document.querySelector('.tabs').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
+};
+
+// ---- Settings -------------------------------------------------------------------
+// The server sends the list of settings (schema) and the ones changed so far.
+// Anything not changed shows its default from config.js.
+const DEFAULTS = window.EYE_CONFIG || {};
+let schema = null, overrides = {}, dragging = null;
+const sendTimers = {};
+
+const decimals = step => (String(step).split('.')[1] || '').length;
+const valueOf = key => key in overrides ? overrides[key] : DEFAULTS[key];
+
+function showSettings(m) {
+  overrides = m.values;
+  if (m.schema && !schema) { schema = m.schema; buildSettings(); }
+  if (schema) for (const spec of schema) updateRow(spec);
+}
+
+function buildSettings() {
+  const box = $('settings');
+  box.innerHTML = '';
+  const groups = {};
+  for (const spec of schema) {
+    if (!groups[spec.group]) {
+      const d = document.createElement('details');
+      if (!Object.keys(groups).length) d.open = true;   // first group starts open
+      d.innerHTML = `<summary>${spec.group}</summary>`;
+      box.appendChild(d);
+      groups[spec.group] = d;
+    }
+    const row = document.createElement('div');
+    row.className = 'set';
+    row.dataset.key = spec.key;
+    if (spec.kind === 'toggle') {
+      row.innerHTML = `<div class="set-top"><span class="label">${spec.label}</span>
+        <button class="reset">Reset</button>
+        <label class="switch"><input type="checkbox"><span></span></label></div>`;
+      row.querySelector('input').onchange = e => send({ type: 'setting', key: spec.key, value: e.target.checked });
+    } else {
+      row.innerHTML = `<div class="set-top"><span class="label">${spec.label}</span>
+        <span class="val"></span><button class="reset">Reset</button></div>
+        <div class="set-ctl"><button class="step">−</button>
+        <input type="range" min="${spec.min}" max="${spec.max}" step="${spec.step}">
+        <button class="step">+</button></div>`;
+      const slider = row.querySelector('input');
+      slider.oninput = () => { dragging = spec.key; showVal(spec, row, +slider.value); sendSoon(spec.key, +slider.value); };
+      slider.onchange = () => { dragging = null; sendNow(spec.key, +slider.value); };
+      const [minus, plus] = row.querySelectorAll('.step');
+      holdToRepeat(minus, () => nudge(spec, row, -1));
+      holdToRepeat(plus, () => nudge(spec, row, 1));
+    }
+    row.querySelector('.reset').onclick = () => send({ type: 'setting', key: spec.key, value: null });
+    if (spec.help) row.insertAdjacentHTML('beforeend', `<p class="help">${spec.help}</p>`);
+    groups[spec.group].appendChild(row);
+  }
+}
+
+function updateRow(spec) {
+  const row = document.querySelector(`.set[data-key="${spec.key}"]`);
+  if (!row) return;
+  row.querySelector('.reset').classList.toggle('hidden', !(spec.key in overrides));
+  const v = valueOf(spec.key);
+  if (spec.kind === 'toggle') { row.querySelector('input').checked = !!v; return; }
+  if (dragging === spec.key) return;   // don't fight the finger
+  row.querySelector('input').value = v;
+  showVal(spec, row, v);
+}
+
+function showVal(spec, row, v) {
+  row.querySelector('.val').textContent = Number(v).toFixed(decimals(spec.step));
+}
+
+function nudge(spec, row, dir) {
+  const slider = row.querySelector('input');
+  const v = Math.min(spec.max, Math.max(spec.min, +slider.value + dir * spec.step));
+  slider.value = v;
+  showVal(spec, row, v);
+  sendNow(spec.key, +v.toFixed(decimals(spec.step)));
+}
+
+// Send while dragging, but no more than ~10 times a second.
+function sendSoon(key, value) {
+  if (sendTimers[key]) { sendTimers[key].value = value; return; }
+  sendTimers[key] = { value, t: setTimeout(() => { send({ type: 'setting', key, value: sendTimers[key].value }); delete sendTimers[key]; }, 100) };
+}
+function sendNow(key, value) {
+  if (sendTimers[key]) { clearTimeout(sendTimers[key].t); delete sendTimers[key]; }
+  send({ type: 'setting', key, value });
+}
+
+// Hold a −/+ button to keep nudging.
+function holdToRepeat(btn, fn) {
+  let delay, repeat;
+  const stop = () => { clearTimeout(delay); clearInterval(repeat); };
+  btn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    fn();
+    delay = setTimeout(() => { repeat = setInterval(fn, 90); }, 400);
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
+}
+
+drawDot();
+connect();
+</script>
+</body>
+</html>

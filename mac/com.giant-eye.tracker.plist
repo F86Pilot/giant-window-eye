@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Giant Eye tracker as a system background service on the Mac mini.
+  Template: install with mac/install.sh, which fills in your home folder and puts it
+  in /Library/LaunchDaemons/ (owned by root). Runs as root.
+  Starts at boot (no login needed), restarts if it stops, and keeps the Mac
+  from sleeping while it runs (KEEP_AWAKE).
+
+  Why root: macOS's "Local Network" privacy blocks background programs from
+  reaching the camera ("No route to host") unless they run as root.
+  See Apple TN3179 "Understanding local network privacy".
+
+  Log: ~/Library/Logs/giant-eye.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.giant-eye.tracker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/giant-eye/.venv/bin/python</string>
+    <string>-u</string>
+    <string>tracker.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__HOME__/giant-eye</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>__HOME__</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>PORT</key>
+    <string>8085</string>
+    <key>KEEP_AWAKE</key>
+    <string>1</string>
+    <key>LOG_FILE</key>
+    <string>__HOME__/Library/Logs/giant-eye.log</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/giant-eye-launch.log</string>
+</dict>
+</plist>

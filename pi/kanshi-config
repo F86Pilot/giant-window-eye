@@ -1,0 +1,5 @@
+# Giant Eye: run the screen at 720p. The TV scales it up, and the Pi draws
+# the eye about twice as smoothly as at 1080p.
+profile eye {
+    output HDMI-A-1 mode 1280x720@60Hz
+}

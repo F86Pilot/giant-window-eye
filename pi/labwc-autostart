@@ -1,0 +1,5 @@
+# Giant Eye kiosk. This replaces the normal desktop (no taskbar or icons):
+# the screen only shows the eye. To get the normal desktop back, delete this
+# file and restart the Pi.
+/usr/bin/kanshi &
+"$HOME/eye-kiosk.sh" &

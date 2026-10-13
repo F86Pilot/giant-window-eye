@@ -1,0 +1,14 @@
+# Camera address with password: never commit
+camera_url.txt
+
+# Saved calibration, ignored spots and settings (made by the phone page)
+data/
+
+# Local Python environment and caches
+.venv/
+__pycache__/
+
+# Detection model (downloaded automatically)
+*.pt
+
+.DS_Store

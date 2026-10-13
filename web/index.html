@@ -1,0 +1,657 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Giant Eye</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  body.mouse { cursor: crosshair; }
+  canvas { display: block; touch-action: none; }
+  #hud {
+    position: fixed; left: 10px; top: 10px; display: none;
+    font: 14px/1.4 ui-monospace, Menlo, monospace; color: #8f8; background: rgba(0,0,0,.7);
+    padding: 8px 10px; border: 1px solid #353; border-radius: 6px; white-space: pre;
+  }
+  #buttons {
+    position: fixed; left: 0; right: 0; bottom: 0; display: none; gap: 8px; padding: 10px 16px 16px;
+    justify-content: center; flex-wrap: wrap; background: linear-gradient(transparent, rgba(0,0,0,.8));
+  }
+  body.mouse #buttons { display: flex; }
+  #buttons button {
+    font: 600 15px -apple-system, system-ui, sans-serif; color: #eee; background: rgba(60,60,60,.85);
+    border: 1px solid #555; border-radius: 10px; padding: 12px 14px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="eye"></canvas>
+<div id="hud"></div>
+<div id="buttons">
+  <button data-react="sleep">😴 Sleep</button>
+  <button data-react="startle">😱 Startle</button>
+  <button data-react="roll">🙄 Eye roll</button>
+  <button data-react="doubletake">👀 Double-take</button>
+  <button data-react="blink">Blink</button>
+</div>
+<script src="config.js"></script>
+<script>
+// ---------------------------------------------------------------------------
+// Settings (defaults; config.js overrides them)
+// ---------------------------------------------------------------------------
+const C = Object.assign({
+  irisHue: 22, hueDrift: true, hueFrom: 0, hueTo: 45, hueCycleMinutes: 10,
+  irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
+  eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
+  maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
+  moods: true, drowsySec: 6,
+  eyeRollChance: 0.04, doubleTakeChance: 0.4,
+  wsUrl: "", maxPixelRatio: 2,
+}, window.EYE_CONFIG || {});
+C.showGuide = false;
+const BASE = { ...C };   // config.js values; settings from the phone page go on top
+
+// Settings changed on the phone page. Most take effect on the next frame; ones
+// that change the pre-drawn images (size, position, look) rebuild them, at most
+// a few times a second so dragging a slider stays smooth on the Pi.
+const REDRAW_KEYS = ['eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
+let rebuildTimer = null;
+function applySettings(values) {
+  const next = { ...BASE, ...values };
+  const rebuild = REDRAW_KEYS.some(k => next[k] !== C[k]);
+  Object.assign(C, next);
+  if (rebuild && !rebuildTimer) rebuildTimer = setTimeout(() => { rebuildTimer = null; resize(); }, 150);
+}
+
+const params = new URLSearchParams(location.search);
+const mouseMode = params.has('mouse');
+let hudOn = params.has('debug');
+if (mouseMode) document.body.classList.add('mouse');
+
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+function clampToDisc(p) {
+  const d = Math.hypot(p.x, p.y);
+  if (d > 1) { p.x /= d; p.y /= d; }
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// Canvas + pre-drawn textures (drawn once per resize so the Pi stays smooth)
+// ---------------------------------------------------------------------------
+const canvas = document.getElementById('eye');
+const ctx = canvas.getContext('2d');
+let W, H, dpr, cx, cy, R, irisR, scleraTex, vignette, pupilTex, glintTex;
+
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, C.maxPixelRatio);
+  W = canvas.width = Math.round(innerWidth * dpr);
+  H = canvas.height = Math.round(innerHeight * dpr);
+  canvas.style.width = innerWidth + 'px';
+  canvas.style.height = innerHeight + 'px';
+  R = Math.min(W, H) / 2 * C.eyeScale;
+  cx = W / 2 + C.eyeShiftX * H;
+  cy = H / 2 + C.eyeShiftY * H;
+  irisR = R * C.irisSize;
+  scleraTex = makeSclera();
+  irisCache.clear();
+  // Soft-edged shapes are pre-drawn once: making gradients every frame is very slow on the Pi.
+  pupilTex = makeSoftDot(256, [[0.85 / 1.08, '#000'], [1, 'rgba(0,0,0,0)']]);
+  glintTex = makeSoftDot(Math.ceil(R * 0.32),
+    [[0, 'rgba(255,255,255,0.75)'], [0.35, 'rgba(255,255,255,0.25)'], [1, 'rgba(255,255,255,0)']]);
+  vignette = ctx.createRadialGradient(cx, cy, R * 0.7, cx, cy, R);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)');
+  vignette.addColorStop(0.7, 'rgba(0,0,0,0.35)');
+  vignette.addColorStop(1, 'rgba(0,0,0,0.9)');
+}
+
+function makeSclera() {
+  const c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(R * 2);
+  const g = c.getContext('2d');
+  const b = C.scleraBrightness;
+  const col = (r, gg, bb) => `rgb(${r * b | 0},${gg * b | 0},${bb * b | 0})`;
+  const grad = g.createRadialGradient(R * 0.85, R * 0.75, R * 0.05, R, R, R);
+  grad.addColorStop(0, col(255, 250, 244));
+  grad.addColorStop(0.55, col(225, 212, 205));
+  grad.addColorStop(0.82, col(150, 118, 115));
+  grad.addColorStop(1, col(35, 15, 18));
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(R, R, R, 0, Math.PI * 2); g.fill();
+
+  if (C.veins && b > 0.05) {
+    g.lineCap = 'round';
+    const vein = (x, y, ang, len, width, depth) => {
+      g.strokeStyle = `rgba(175,25,35,${(0.25 + depth * 0.1) * b})`;
+      g.lineWidth = width;
+      g.beginPath(); g.moveTo(x, y);
+      const steps = 8;
+      for (let i = 0; i < steps; i++) {
+        ang += rand(-0.35, 0.35);
+        x += Math.cos(ang) * len / steps;
+        y += Math.sin(ang) * len / steps;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+      if (depth > 0) {
+        const n = 1 + (Math.random() * 2 | 0);
+        for (let k = 0; k < n; k++) vein(x, y, ang + rand(-0.8, 0.8), len * 0.6, width * 0.6, depth - 1);
+      }
+    };
+    for (let i = 0; i < 22; i++) {
+      const a = rand(0, Math.PI * 2);
+      vein(R + Math.cos(a) * R, R + Math.sin(a) * R, a + Math.PI + rand(-0.3, 0.3),
+           R * rand(0.18, 0.32), R * 0.012, 2);
+    }
+  }
+  return c;
+}
+
+// A round, soft-edged dot drawn once. stops = [[position 0..1 from center, color], ...]
+function makeSoftDot(size, stops) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  for (const [at, color] of stops) grad.addColorStop(at, color);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return c;
+}
+
+// ---------------------------------------------------------------------------
+// Iris color. The iris is pre-drawn in several colors (same pattern each time),
+// and we fade between neighboring colors so the hue drifts smoothly.
+// ---------------------------------------------------------------------------
+const HUE_STEP = 15;           // degrees between pre-drawn colors
+const irisCache = new Map();
+function irisForHue(h) {
+  if (!irisCache.has(h)) irisCache.set(h, makeIris(h));
+  return irisCache.get(h);
+}
+function currentHue(now) {
+  if (!C.hueDrift) return C.irisHue;
+  // glide from hueFrom to hueTo and back, easing at each end
+  const t = now / 60000 / C.hueCycleMinutes;
+  return C.hueFrom + (C.hueTo - C.hueFrom) * (0.5 - 0.5 * Math.cos(t * 2 * Math.PI));
+}
+// Random numbers that come out the same every time (so fibers line up between colors).
+function seededRandom(seed) {
+  return (a, b) => {
+    seed = (seed * 16807) % 2147483647;
+    return a + (seed / 2147483647) * (b - a);
+  };
+}
+
+function makeIris(h) {
+  const rand = seededRandom(42);
+  const glow = irisR * 0.6;
+  const size = Math.ceil((irisR + glow) * 2);
+  const m = size / 2;
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+
+  // soft glow spilling past the iris edge
+  let grad = g.createRadialGradient(m, m, irisR * 0.9, m, m, irisR + glow);
+  grad.addColorStop(0, `hsla(${h},100%,55%,0.55)`);
+  grad.addColorStop(1, `hsla(${h},100%,50%,0)`);
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+
+  // base color: bright center fading to a dark rim
+  grad = g.createRadialGradient(m, m, irisR * 0.15, m, m, irisR);
+  grad.addColorStop(0, `hsl(${h + 30},100%,75%)`);
+  grad.addColorStop(0.4, `hsl(${h + 10},100%,58%)`);
+  grad.addColorStop(0.8, `hsl(${h},95%,40%)`);
+  grad.addColorStop(1, `hsl(${h - 10},90%,14%)`);
+  g.fillStyle = grad;
+  g.beginPath(); g.arc(m, m, irisR, 0, Math.PI * 2); g.fill();
+
+  // fibers radiating out from the pupil
+  g.save();
+  g.beginPath(); g.arc(m, m, irisR, 0, Math.PI * 2); g.clip();
+  g.lineCap = 'round';
+  for (let i = 0; i < 420; i++) {
+    const a = rand(0, Math.PI * 2);
+    const r0 = irisR * rand(0.25, 0.4), r1 = irisR * rand(0.75, 1.0);
+    const bend = rand(-0.08, 0.08);
+    const dark = rand(0, 1) < 0.3;
+    g.strokeStyle = dark ? `rgba(0,0,0,${rand(0.15, 0.35)})`
+                         : `hsla(${h + rand(-5, 30)},100%,${rand(60, 88)}%,${rand(0.12, 0.4)})`;
+    g.lineWidth = irisR * rand(0.006, 0.018);
+    g.beginPath();
+    g.moveTo(m + Math.cos(a) * r0, m + Math.sin(a) * r0);
+    const am = a + bend, rm = (r0 + r1) / 2;
+    g.quadraticCurveTo(m + Math.cos(am) * rm, m + Math.sin(am) * rm,
+                       m + Math.cos(a) * r1, m + Math.sin(a) * r1);
+    g.stroke();
+  }
+  // bright wavy ring around the pupil
+  g.strokeStyle = `hsla(${h + 35},100%,82%,0.5)`;
+  g.lineWidth = irisR * 0.035;
+  g.beginPath();
+  for (let i = 0; i <= 64; i++) {
+    const a = i / 64 * Math.PI * 2;
+    const r = irisR * (0.52 + Math.sin(a * 9) * 0.025 + rand(-0.015, 0.015));
+    i ? g.lineTo(m + Math.cos(a) * r, m + Math.sin(a) * r) : g.moveTo(m + Math.cos(a) * r, m + Math.sin(a) * r);
+  }
+  g.stroke();
+  // dark outer ring (limbal ring)
+  grad = g.createRadialGradient(m, m, irisR * 0.85, m, m, irisR);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.85)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  g.restore();
+  return c;
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const look = { x: 0, y: 0 };      // where the eye is pointing now (-1..1 disc)
+const target = { x: 0, y: 0 };    // where it wants to point
+const jitter = { x: 0, y: 0 };    // tiny eye movements so it never looks frozen
+let lastSeen = -Infinity;         // last time a person (or the mouse) gave us a target
+let nextGlance = 0, nextJitter = 0;
+let pupil = 1, blink = 0, blinkStart = -1;
+let nextBlink = performance.now() + rand(C.blinkMinSec, C.blinkMaxSec) * 1000;
+let lastMsg = null;
+let manualAim = false;            // the phone calibration page is steering the eye
+
+// ---------------------------------------------------------------------------
+// Mouse / touch test mode   (open the page with ?mouse at the end of the URL)
+// ---------------------------------------------------------------------------
+if (mouseMode) {
+  const point = (clientX, clientY) => {
+    const p = clampToDisc({
+      x: ((clientX * dpr - cx) / R) / C.maxTravel * 0.8,
+      y: ((clientY * dpr - cy) / R) / C.maxTravel * 0.8,
+    });
+    target.x = p.x; target.y = p.y;
+    lastSeen = performance.now();
+    noticeMovement(lastSeen);
+  };
+  addEventListener('mousemove', e => point(e.clientX, e.clientY));
+  const onTouch = e => { if (!e.target.closest('#buttons')) point(e.touches[0].clientX, e.touches[0].clientY); };
+  addEventListener('touchmove', onTouch, { passive: true });
+  addEventListener('touchstart', onTouch, { passive: true });
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket from the server (person positions). Reconnects forever.
+// ---------------------------------------------------------------------------
+let pageVersion = null;
+let ws = null, wsState = mouseMode ? 'off (mouse mode)' : 'connecting', retryMs = 1000, lastWsMsg = 0;
+
+function connect() {
+  const host = location.host || 'localhost:8080';
+  const url = C.wsUrl || (location.protocol === 'https:' ? 'wss://' : 'ws://') + host + '/ws';
+  try { ws = new WebSocket(url); } catch (e) { return retry(); }
+  ws.onopen = () => { wsState = 'connected'; retryMs = 1000; lastWsMsg = performance.now(); };
+  ws.onmessage = e => {
+    lastWsMsg = performance.now();
+    let msg;
+    try { msg = JSON.parse(e.data); } catch (err) { return; }
+    if (msg.type === 'react') { react(msg.action); return; }   // test button on the phone page
+    if (msg.type === 'settings') { applySettings(msg.values); return; }
+    lastMsg = msg;
+    // The server or page files were updated: reload to get the new version.
+    if (msg.v) {
+      if (pageVersion && msg.v !== pageVersion) location.reload();
+      pageVersion = msg.v;
+    }
+    // The server sends the eye direction (lx, ly), already calibrated.
+    manualAim = !!msg.manual;
+    if (msg.present && msg.lx !== undefined) {
+      const p = clampToDisc({ x: msg.lx, y: msg.ly });
+      target.x = p.x; target.y = p.y;
+      noticeMovement(performance.now());
+      lastSeen = performance.now();
+    }
+  };
+  ws.onclose = retry;
+  ws.onerror = () => ws.close();
+}
+function retry() {
+  if (ws) { ws.onclose = ws.onerror = ws.onmessage = null; }
+  ws = null;
+  wsState = 'reconnecting';
+  setTimeout(connect, retryMs);
+  retryMs = Math.min(retryMs * 1.5, 5000);
+}
+// If the server goes silent (e.g. Wi-Fi hiccup), drop the connection and retry.
+setInterval(() => {
+  if (ws && ws.readyState === 1 && performance.now() - lastWsMsg > 10000) ws.close();
+}, 2000);
+if (!mouseMode) connect();
+
+// ---------------------------------------------------------------------------
+// Behavior: blinking, idle glances, following
+// ---------------------------------------------------------------------------
+const ease = t => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+function updateBlink(now) {
+  if (mood === 'drowsy' || mood === 'asleep') { nextBlink = Math.max(nextBlink, now + 1000); }
+  if (blinkStart < 0 && now >= nextBlink) blinkStart = now;
+  if (blinkStart < 0) return;
+  const t = (now - blinkStart) / 1000, close = 0.08, hold = 0.05, open = 0.17;
+  if (t < close) blink = ease(t / close);
+  else if (t < close + hold) blink = 1;
+  else if (t < close + hold + open) blink = 1 - ease((t - close - hold) / open);
+  else {
+    blink = 0; blinkStart = -1;
+    // occasionally a quick double-blink
+    nextBlink = now + (Math.random() < 0.15 ? 120 : rand(C.blinkMinSec, C.blinkMaxSec) * 1000);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Moods: eye rolls, double-takes, and falling asleep / startling awake (Sleep test button)
+// ---------------------------------------------------------------------------
+let mood = 'awake';                       // awake | drowsy | asleep | rolling
+let moodStart = 0, sleepUntil = Infinity;
+const lids = { upper: 0, lower: 0 };      // 0 = wide open, 1 = shut
+let lidSpeedUntil = 0, lidSpeedFast = 0;  // temporary lid speed (snap open / slow wake)
+let snapUntil = 0;                        // eye darts extra fast until this time
+let squintUntil = 0;                      // "unimpressed" half-closed lids after an eye roll
+let override = null;                      // a scripted look (eye roll, double-take)
+let personAnchor = null, lastMoved = 0;   // for noticing a person standing still
+let wasTracking = false;
+
+function setMood(m, now) { mood = m; moodStart = now; }
+
+// Called whenever a new person position arrives: has the person actually moved?
+function noticeMovement(now) {
+  if (!personAnchor || Math.hypot(target.x - personAnchor.x, target.y - personAnchor.y) > 0.1) {
+    personAnchor = { x: target.x, y: target.y };
+    lastMoved = now;
+  }
+}
+
+function startle(now) {
+  setMood('awake', now);
+  override = null;
+  lidSpeedFast = 30; lidSpeedUntil = now + 400;   // lids snap open
+  snapUntil = now + 500;                           // eye darts to the person
+  pupil = 0.45;                                    // pupil shrinks in surprise
+  nextBlink = now + 700;                           // a "what was that?" blink
+}
+
+// sleepSec: wake up on its own after this long (0 = stay asleep until someone moves)
+function fallAsleep(now, sleepSec) {
+  setMood('drowsy', now);
+  override = null;
+  sleepUntil = sleepSec ? now + (C.drowsySec + sleepSec) * 1000 : Infinity;
+}
+
+function startEyeRoll(now) {
+  const start = now, dur = 1400, dir = Math.random() < 0.5 ? 1 : -1;
+  setMood('rolling', now);
+  override = { until: now + dur, fn: t => {
+    const a = -Math.PI / 2 + ease(Math.min(1, (t - start) / dur)) * 2 * Math.PI * dir;
+    return { x: Math.cos(a) * 0.9, y: Math.sin(a) * 0.9, speed: 30 };
+  } };
+}
+
+function startDoubleTake(now) {
+  const start = now;
+  override = { until: now + 1100, fn: t => {
+    const e = t - start;
+    if (e < 350) return { x: target.x, y: target.y, speed: 14 };                     // notice them...
+    if (e < 750) return { x: target.x > 0 ? -0.6 : 0.6, y: -0.1, speed: 14 };      // ...look away...
+    return { x: target.x, y: target.y, speed: 28 };                                  // ...snap back!
+  } };
+}
+
+function updateMood(now, tracking, dt) {
+  const arrived = tracking && !wasTracking;
+  wasTracking = tracking;
+
+  if (!C.moods || manualAim) {
+    if (mood !== 'awake' && mood !== 'rolling') setMood('awake', now);
+  } else if (tracking) {
+    if (mood === 'drowsy' || mood === 'asleep') {
+      // Someone new showed up, or the person in view moved: wake up!
+      if (arrived || now - lastMoved < 300) startle(now);
+    } else if (mood === 'awake') {
+      if (arrived) {
+        lastMoved = now;
+        if (Math.random() < C.doubleTakeChance) startDoubleTake(now);
+      }
+    }
+  } else if (mood === 'asleep' && now > sleepUntil) {
+    setMood('awake', now);    // done sleeping: wake up slowly on our own
+    lidSpeedFast = 1.2; lidSpeedUntil = now + 2500;
+  }
+  if (mood === 'drowsy' && now - moodStart > C.drowsySec * 1000) setMood('asleep', now);
+  if (mood === 'rolling' && !override) { setMood('awake', now); squintUntil = now + 1500; }
+
+  // Where the eyelids want to be for this mood
+  let upper = 0, lower = 0, speed = 8;
+  if (mood === 'drowsy') {
+    // lids sag, then jerk back up, as if fighting to stay awake
+    const t = (now - moodStart) / 1000, heavy = Math.min(1, t / C.drowsySec);
+    upper = 0.35 + 0.45 * heavy * (0.5 - 0.5 * Math.cos(t * 2.2));
+    lower = 0.12; speed = 3;
+  } else if (mood === 'asleep') {
+    upper = 1; lower = 1; speed = 1.5;
+  } else if (now < squintUntil) {
+    upper = 0.52; lower = 0.15; speed = 6;
+  }
+  if (now < lidSpeedUntil) speed = lidSpeedFast;
+  const k = 1 - Math.exp(-dt * speed);
+  lids.upper += (upper - lids.upper) * k;
+  lids.lower += (lower - lids.lower) * k;
+}
+
+function updateLook(now, dt) {
+  const tracking = now - lastSeen < C.idleAfterSec * 1000;
+  updateMood(now, tracking, dt);
+  if (!tracking && now >= nextGlance && mood === 'awake' && !override) {
+    nextGlance = now + rand(1.2, 4) * 1000;
+    if (C.moods && Math.random() < C.eyeRollChance) {
+      startEyeRoll(now);
+    } else if (Math.random() < 0.3) {
+      // Idle: look around at about eye level or slightly up (so looking down
+      // at a person is a big, dramatic change). Sometimes return to center.
+      target.x = 0; target.y = -C.idleUpMost * 0.3;
+    } else {
+      target.x = rand(-0.8, 0.8); target.y = rand(-C.idleUpMost, C.idleDownMost);
+    }
+    clampToDisc(target);
+  }
+  if (now >= nextJitter) {
+    jitter.x = rand(-0.03, 0.03); jitter.y = rand(-0.03, 0.03);
+    nextJitter = now + rand(300, 900);
+  }
+  // Idle glances are quick darts (saccades); tracking is smooth.
+  let goal = target, speed = tracking ? C.smoothing : 14;
+  if (override) {
+    if (now > override.until) override = null;
+    else { goal = override.fn(now); speed = goal.speed; }
+  }
+  if (!override && (mood === 'drowsy' || mood === 'asleep')) {
+    goal = { x: target.x * 0.4, y: 0.35 };   // eyes sink downward as it nods off
+    speed = 1.5;
+  }
+  if (now < snapUntil) speed = 25;
+  const k = 1 - Math.exp(-dt * speed);
+  look.x += (goal.x + jitter.x - look.x) * k;
+  look.y += (goal.y + jitter.y - look.y) * k;
+  clampToDisc(look);
+
+  // Pupil tightens when focused on someone, relaxes when idle, opens up when
+  // sleepy, and "breathes" slightly.
+  const sleepy = mood === 'drowsy' || mood === 'asleep';
+  const pupilGoal = (sleepy ? 1.2 : tracking ? 0.8 : 1.05) + Math.sin(now / 1700) * 0.04;
+  pupil += (pupilGoal - pupil) * (1 - Math.exp(-dt * 3));
+  return tracking;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Clear the WHOLE screen each frame. The Pi's graphics chip is much faster
+  // starting from a full clear than from a partly cleared picture.
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+  ctx.drawImage(scleraTex, cx - R, cy - R);
+
+  // Iris + pupil, squashed as they turn toward the edge so it looks like a ball
+  const ox = look.x * C.maxTravel * R, oy = look.y * C.maxTravel * R;
+  const d = Math.min(Math.hypot(ox, oy) / R, 0.95);
+  const squash = Math.cos(Math.asin(d));
+  const ang = Math.atan2(oy, ox);
+  ctx.save();
+  ctx.translate(cx + ox, cy + oy);
+  ctx.rotate(ang); ctx.scale(squash, 1); ctx.rotate(-ang);
+  const hue = currentHue(performance.now());
+  const h0 = Math.floor(hue / HUE_STEP) * HUE_STEP, fade = (hue - h0) / HUE_STEP;
+  const ia = irisForHue(h0), ib = irisForHue(h0 + HUE_STEP);
+  ctx.drawImage(ia, -ia.width / 2, -ia.height / 2);
+  if (fade > 0.01) {
+    ctx.globalAlpha = fade;
+    ctx.drawImage(ib, -ib.width / 2, -ib.height / 2);
+    ctx.globalAlpha = 1;
+  }
+  const pr = irisR * C.pupilSize * pupil;
+  ctx.drawImage(pupilTex, -pr * 1.08, -pr * 1.08, pr * 2.16, pr * 2.16);
+  ctx.restore();
+
+  // Darken toward the edge of the eyeball (roundness)
+  ctx.fillStyle = vignette;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+  // Wet-looking highlights (fixed, like a light reflecting off the eye)
+  const hx = cx - R * 0.32, hy = cy - R * 0.38;
+  ctx.drawImage(glintTex, hx - R * 0.16, hy - R * 0.16, R * 0.32, R * 0.32);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.beginPath(); ctx.arc(cx - R * 0.18, cy - R * 0.25, R * 0.025, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+
+  // Eyelids: an upper lid that comes down from the top and a lower lid that
+  // comes up from the bottom. 0 = lid fully open, 1 = lid at the line where they meet.
+  const upper = Math.max(lids.upper, blink), lower = Math.max(lids.lower, blink);
+  // Lower lid first, so when the eye is shut the upper lid's edge is the single
+  // curved "closed eye" line. Lid lines stay inside the eyeball.
+  if (upper > 0.001 || lower > 0.001) {
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, R * 1.02, 0, Math.PI * 2); ctx.clip();
+    if (lower > 0.001) drawLid(cy + R * 1.4 + (cy + R * 0.25 - (cy + R * 1.4)) * lower, 1);
+    if (upper > 0.001) drawLid(cy - R * 1.4 + (cy + R * 0.25 - (cy - R * 1.4)) * upper, -1);
+    ctx.restore();
+  }
+  if (C.showGuide) drawGuide();
+}
+
+// Alignment guide: a bright ring at the eyeball's edge and a cross at its center.
+function drawGuide() {
+  ctx.strokeStyle = '#0f0';
+  ctx.lineWidth = Math.max(3, R * 0.012);
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - R * 0.15, cy); ctx.lineTo(cx + R * 0.15, cy);
+  ctx.moveTo(cx, cy - R * 0.15); ctx.lineTo(cx, cy + R * 0.15);
+  ctx.stroke();
+}
+
+// One eyelid. edgeY = where the lid's edge crosses the middle of the eye.
+// side = -1 for the upper lid (covers everything above its edge), 1 for the lower lid.
+// The edge curves like a real lid: highest in the middle for the upper lid,
+// lowest in the middle for the lower lid.
+function drawLid(edgeY, side) {
+  const half = R * 1.1, curve = R * 0.35 * -side;
+  const outer = side < 0 ? cy - half : cy + half;
+  ctx.beginPath();
+  ctx.moveTo(cx - half, outer);
+  for (let i = 0; i <= 16; i++) {
+    const u = i / 8 - 1;   // -1 (left) to 1 (right)
+    ctx.lineTo(cx + u * half, edgeY + curve * u * u);
+  }
+  ctx.lineTo(cx + half, outer);
+  ctx.closePath();
+  ctx.fillStyle = '#000';
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(70,25,25,0.9)';
+  ctx.lineWidth = R * 0.03;
+  ctx.beginPath();
+  for (let i = 0; i <= 16; i++) {
+    const u = i / 8 - 1;
+    ctx.lineTo(cx + u * half, edgeY + curve * u * u);
+  }
+  ctx.stroke();
+}
+
+// ---------------------------------------------------------------------------
+// Debug overlay: press D (or open with ?debug)
+// ---------------------------------------------------------------------------
+const hud = document.getElementById('hud');
+let frames = 0, fps = 0, fpsT = performance.now(), tracking = false;
+function updateHud(now) {
+  frames++;
+  if (now - fpsT < 500) return;
+  fps = Math.round(frames * 1000 / (now - fpsT)); frames = 0; fpsT = now;
+  hud.style.display = hudOn ? 'block' : 'none';
+  if (!hudOn) return;
+  hud.textContent =
+    `mode:      ${mouseMode ? 'mouse' : 'camera'}\n` +
+    `server:    ${wsState}\n` +
+    `tracking:  ${tracking ? 'YES' : 'no (idle)'}\n` +
+    `mood:      ${mood}${manualAim ? ' (phone aiming)' : ''}\n` +
+    `look:      ${look.x.toFixed(2)}, ${look.y.toFixed(2)}\n` +
+    `last msg:  ${lastMsg ? JSON.stringify(lastMsg) : '-'}\n` +
+    `iris hue:  ${Math.round(currentHue(now))}\n` +
+    `fps:       ${fps}\n` +
+    `keys: D=debug  B=blink  F=fullscreen\n` +
+    `      S=sleep  W=startle  R=eye roll  T=double-take`;
+}
+
+// Trigger a reaction on demand (test buttons, phone page, or keyboard).
+function react(action) {
+  const now = performance.now();
+  if (action === 'sleep') fallAsleep(now, 20);
+  if (action === 'startle') startle(now);
+  if (action === 'roll') startEyeRoll(now);
+  if (action === 'doubletake') startDoubleTake(now);
+  if (action === 'blink') nextBlink = 0;
+}
+document.getElementById('buttons').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (b) react(b.dataset.react);
+});
+
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (k === 'd') hudOn = !hudOn;
+  const keys = { b: 'blink', s: 'sleep', w: 'startle', r: 'roll', t: 'doubletake' };
+  if (keys[k]) react(keys[k]);
+  if (k === 'f') document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+addEventListener('dblclick', () => document.documentElement.requestFullscreen?.());
+addEventListener('resize', resize);
+
+// ---------------------------------------------------------------------------
+// Main loop
+// ---------------------------------------------------------------------------
+let prev = performance.now();
+function frame(now) {
+  const dt = Math.min((now - prev) / 1000, 0.1);
+  prev = now;
+  updateBlink(now);
+  tracking = updateLook(now, dt);
+  draw();
+  updateHud(now);
+  requestAnimationFrame(frame);
+}
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
