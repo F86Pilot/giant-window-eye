@@ -395,12 +395,12 @@ class Voice:
             return None
         h, w = f.shape[:2]
         x1, y1, x2, y2 = box[0] * w, box[1] * h, box[2] * w, box[3] * h
-        pw, ph = (x2 - x1) * 0.6, (y2 - y1) * 0.25
+        pw, ph = (x2 - x1) * 1.0, (y2 - y1) * 0.4
         part = f[max(0, int(y1 - ph)):int(y2 + ph), max(0, int(x1 - pw)):int(x2 + pw)]
         if part.size == 0:
             return None
         im = Image.fromarray(part[:, :, ::-1].copy())   # BGR -> RGB
-        im.thumbnail((448, 448))
+        im.thumbnail((640, 640))
         return im
 
     def character(self):
