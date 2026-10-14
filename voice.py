@@ -32,6 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KEY_FILE = os.path.join(HERE, "anthropic_key.txt")
 ELEVEN_KEY_FILE = os.path.join(HERE, "elevenlabs_key.txt")
 VOICES_DIR = os.path.join(HERE, "voice", "voices")   # Piper voices (the free backup)
+LIBRARY_DIR = os.path.join(HERE, "voice", "library")  # pre-recorded lines per character (see Library)
 
 # ElevenLabs: expressive voices that follow delivery cues like [whispers] or [cackles].
 ELEVEN_URL = "https://api.us.elevenlabs.io/v1/text-to-speech/{voice}?output_format=mp3_44100_128"
@@ -58,9 +59,12 @@ CHARACTERS = {
                   "your world. Wicked-fun, never truly frightening: kids walk by too, so no threats and no real curses.\n"
                   "Start the line with [raspy old witch voice]; a [cackles] fits well."),
         "effect": None,
+        "library": "witch",              # voice/library/witch.json
         "preview": "[raspy old witch voice] Cutting across my lawn, dearie? [cackles] My broom does that too!",
     },
 }
+FAST_ZONE_WAIT = 3.0      # seconds a fast rider's line waits for them to reach a talk zone ("zone" mode)
+PHOTO_DAYS = 14           # the photo used for each line is kept this long (Live tab, for checking picks)
 SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
 
 DEFAULTS = {
@@ -70,10 +74,16 @@ DEFAULTS = {
     "quietFrom": 22, "quietTo": 7,   # no talking between these hours (same number = never quiet)
     "model": "claude-opus-5-5",
     "character": "george",      # see CHARACTERS
+    "lineSource": "live",       # live = Claude writes + ElevenLabs speaks; library = Claude picks a recorded line;
+                                # random = a random recorded line (no AI). Library modes need the character's library.
+    "fastLines": True,          # people faster than maxSpeed (bikes, scooters) get a quick random recorded line
+    "fastWhen": "now",          # "now" = as soon as they're spotted; "zone" = when they reach a talk zone
+                                # (or right away if they already passed one / don't reach one within FAST_ZONE_WAIT)
     "talkZones": [],            # shapes (lists of [x, y], 0-1 in the camera picture): play when feet are inside
     "noPhotoZones": [],         # shapes: don't take the photo while feet are inside
     "zoneWait": 20,             # seconds to wait for a photo, and then for them to reach a talk zone
     "lingerSeconds": 20,        # someone still here this long after their line gets one more (once). 0 = off
+    "maxSpeed": 2.0,            # skip anyone faster than this, in their own heights per second (bikes). 0 = off
     "mustMove": True,           # only talk to "people" whose feet moved (a quarter of their height): skips static objects
 }
 MODELS = {
@@ -113,6 +123,19 @@ TAGS = """- The voice understands delivery cues in square brackets. Use one or t
   Use an ellipsis (...) for a dramatic pause. Cues don't count toward the 15 words.
 """
 NO_TAGS = "- No square-bracket cues.\n"
+PICK_PROMPT = """You choose what a giant glowing eyeball in a house window says to someone walking by.
+You get a security-camera photo of them and a list of pre-recorded lines (id: line).
+
+Pick the ONE line that fits this person best. Look for, in this order of priority:
+1. A dog, stroller, wagon, kids, a bike or scooter, or being a pair or group.
+2. What they're doing: jogging, waving, looking up, on their phone, carrying something.
+3. What they're wearing: a clothing type or a clearly visible color.
+4. Only if none of those fit: a general line that suits the time of day.
+- Never pick a line that says something untrue about them: wrong color, a dog or stroller that
+  isn't there, "you two" for one person, "dropped something" when they didn't.
+- Avoid the recently used lines listed, if another fits about as well.
+Answer SKIP if there's clearly no person. Answer NONE only if something remarkable is clearly visible
+that no line could cover. Otherwise answer with the line's id."""
 CANNED = [
     "I see you.", "Don't mind me. Just watching.", "Lovely day to be observed.",
     "You walk, I watch. That's our arrangement.", "I never blink first.",
@@ -196,6 +219,69 @@ def clean_shapes(value):
     return shapes
 
 
+def part_of_day(hour):
+    return "morning" if 5 <= hour < 11 else "day" if hour < 17 else "evening" if hour < 21 else "night"
+
+
+class Library:
+    """A character's pre-recorded lines: voice/library/<name>.json (the text, in git) and
+    voice/library/<name>/<id>.mp3 (the recordings, made once with record_library)."""
+
+    def __init__(self, name):
+        data = json.load(open(os.path.join(LIBRARY_DIR, name + ".json")))
+        self.name, self.cue = name, data.get("cue", "")
+        self.lines = {l["id"]: l for l in data["lines"]}
+        self.fast = {l["id"]: l for l in data.get("fast", [])}
+        self.dir = os.path.join(LIBRARY_DIR, name)
+
+    def path(self, lid):
+        return os.path.join(self.dir, lid + ".mp3")
+
+    def text(self, lid):
+        return self.cue + (self.lines.get(lid) or self.fast[lid])["text"]
+
+    def audio(self, lid):
+        with open(self.path(lid), "rb") as f:
+            return f.read()
+
+    def recorded(self, group):
+        return [i for i in group if os.path.exists(self.path(i))]
+
+    def choices(self, now, used, fast=False, fresh_hours=24):
+        """Recorded lines that suit the time of day and month, leaving out ones used in the last
+        fresh_hours (unless that would leave too few to choose from)."""
+        group = self.fast if fast else self.lines
+        fits = [i for i in self.recorded(group)
+                if group[i].get("when") in (None, part_of_day(now.hour))
+                and group[i].get("month") in (None, now.month)]
+        fresh = [i for i in fits if time.time() - used.get(i, 0) > fresh_hours * 3600]
+        return fresh if len(fresh) >= (3 if fast else 12) else fits
+
+
+def record_library(name, voice_id, redo=False):
+    """Record every line of a library with ElevenLabs (only missing ones, unless redo)."""
+    import urllib.request
+    lib = Library(name)
+    key = open(ELEVEN_KEY_FILE).read().strip()
+    os.makedirs(lib.dir, exist_ok=True)
+    made = cost = 0
+    for lid in list(lib.lines) + list(lib.fast):
+        if os.path.exists(lib.path(lid)) and not redo:
+            continue
+        text = lib.text(lid)
+        req = urllib.request.Request(ELEVEN_URL.format(voice=voice_id),
+                                     data=json.dumps({"text": text, "model_id": ELEVEN_MODEL}).encode(),
+                                     headers={"xi-api-key": key, "Content-Type": "application/json"})
+        audio = urllib.request.urlopen(req, timeout=30).read()
+        with open(lib.path(lid), "wb") as f:
+            f.write(audio)
+        made += 1
+        cost += len(text) / 1000 * ELEVEN_PRICE
+        print(f"  recorded {lid}: {text}")
+    print(f"{name}: recorded {made} lines (about ${cost:.2f}); "
+          f"{len(lib.recorded(lib.lines))} regular + {len(lib.recorded(lib.fast))} fast lines ready")
+
+
 class Store:
     """Voice settings and today's count, saved in data/voice.json."""
 
@@ -203,10 +289,12 @@ class Store:
         self.path = path
         self.settings = dict(DEFAULTS)
         self.today = {"date": "", "count": 0, "cost": 0.0}
+        self.used = {}   # recorded line id -> when it last played
         try:
             saved = json.load(open(path))
             self.settings.update({k: v for k, v in saved.get("settings", {}).items() if k in DEFAULTS})
             self.today.update(saved.get("today", {}))
+            self.used = saved.get("used", {})
         except (OSError, ValueError):
             pass
 
@@ -214,7 +302,7 @@ class Store:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({"settings": self.settings, "today": self.today}, f, indent=1)
+            json.dump({"settings": self.settings, "today": self.today, "used": self.used}, f, indent=1)
         os.replace(tmp, self.path)
 
     def roll_day(self):
@@ -227,11 +315,24 @@ class Store:
             return False
         if key in ("enabled", "mustMove"):
             value = bool(value)
+        elif key == "maxSpeed":
+            try:
+                value = round(max(0.0, min(20.0, float(value))), 1)
+            except (TypeError, ValueError):
+                return False
         elif key == "model":
             if value not in MODELS:
                 return False
         elif key == "character":
             if value not in CHARACTERS:
+                return False
+        elif key == "lineSource":
+            if value not in ("live", "library", "random"):
+                return False
+        elif key == "fastLines":
+            value = bool(value)
+        elif key == "fastWhen":
+            if value not in ("now", "zone"):
                 return False
         elif key in ("talkZones", "noPhotoZones"):
             value = clean_shapes(value)
@@ -257,6 +358,8 @@ class Voice:
     def __init__(self, data_dir, read_person, read_frame, send):
         self.read_person, self.read_frame, self.send = read_person, read_frame, send
         self.store = Store(os.path.join(data_dir, "voice.json"))
+        self.photo_dir = os.path.join(data_dir, "voice_photos")   # the photo behind each line
+        self.history_path = os.path.join(data_dir, "voice_history.json")   # recent lines, kept across restarts
         self.client = None
         if os.path.exists(KEY_FILE):
             import anthropic
@@ -265,9 +368,14 @@ class Voice:
             print("Voice: no anthropic_key.txt, so canned lines only")
         self.eleven_key = open(ELEVEN_KEY_FILE).read().strip() if os.path.exists(ELEVEN_KEY_FILE) else None
         self.piper = {}
+        self.libraries = {}      # name -> Library
         self.preview_cache = {}  # character -> (audio, content type), for the Preview button
         self.audio = {}          # line number -> (audio bytes, content type), recent ones only
-        self.history = []        # recent lines, shown on the page
+        self.history = []        # recent lines, shown on the page (and saved, see save_history)
+        try:
+            self.history = json.load(open(self.history_path))[-50:]
+        except (OSError, ValueError):
+            pass
         self.busy = False
         self.spoken_to = {}      # person ID -> (when their line played, the line), for "still here?"
         self.followed_up = set() # person IDs that already got their one "still here" line
@@ -277,7 +385,7 @@ class Voice:
         self.talks = {}          # line number (or "preview") -> {"env", "cues"}, for the eye's talking
         self.talked = set()      # lines the eye already acted out
         self.last_spoken = 0.0
-        self.line_number = 0
+        self.line_number = max([h.get("n", 0) for h in self.history] + [0])   # carry on from saved history
 
     # ---- See and write (Claude), speak (Piper) ----
     def crop(self, box):
@@ -297,6 +405,72 @@ class Voice:
 
     def character(self):
         return CHARACTERS.get(self.store.settings["character"], CHARACTERS["george"])
+
+    def library(self):
+        """The current character's pre-recorded lines, or None if it has none recorded."""
+        name = self.character().get("library")
+        if not name or not os.path.exists(os.path.join(LIBRARY_DIR, name + ".json")):
+            return None
+        lib = self.libraries.get(name)
+        if lib is None:
+            lib = self.libraries[name] = Library(name)
+        return lib if lib.recorded(lib.lines) else None
+
+    def pick(self, model, image, lib, ids, context):
+        """Claude picks the best-fitting recorded line. Returns (id, NONE or SKIP; cost in dollars)."""
+        import anthropic
+        out = io.BytesIO()
+        image.save(out, "JPEG", quality=85)
+        recent = [i for i in sorted(self.store.used, key=self.store.used.get)[-10:] if i in ids]
+        # The list of lines goes in the system prompt and is cached: it only changes when the time of
+        # day does, so after the first pick Claude reads it at a tenth of the price, and answers sooner.
+        listing = "\n".join(f"{i}: {lib.lines[i]['text']}" for i in ids)
+        system = [{"type": "text", "text": f"{PICK_PROMPT}\n\nLines:\n{listing}",
+                   "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+        content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                                                "data": base64.standard_b64encode(out.getvalue()).decode()}},
+                   {"type": "text", "text": f"{context}\nRecently used (avoid if another fits): {', '.join(recent) or 'none'}"}]
+        # Structured output: the reply can only be one of the offered ids (or SKIP / NONE), with no
+        # explanation, which is also quicker.
+        options = dict(MODELS[model])
+        options["output_config"] = {**options.get("output_config", {}), "format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {"id": {"type": "string", "enum": list(ids) + [SKIP, "NONE"]}},
+                       "required": ["id"], "additionalProperties": False}}}
+        try:
+            r = self.client.beta.messages.create(model=model, max_tokens=1024, system=system,
+                                                 messages=[{"role": "user", "content": content}], **options)
+        except anthropic.APIError as e:
+            raise RuntimeError(f"Claude error: {e}") from e
+        if r.stop_reason == "refusal":
+            raise RuntimeError("Claude declined this one")
+        try:
+            answer = json.loads(next(b.text for b in r.content if b.type == "text"))["id"]
+        except (StopIteration, ValueError, KeyError) as e:
+            raise RuntimeError(f"Claude's pick wasn't readable: {e}") from e
+        pin, pout = PRICE[model]
+        u = r.usage
+        cost = (u.input_tokens * pin + (u.cache_creation_input_tokens or 0) * pin * 2   # 1-hour cache write: 2x
+                + (u.cache_read_input_tokens or 0) * pin * 0.1 + u.output_tokens * pout) / 1e6
+        return answer, cost
+
+    def library_info(self):
+        """Recorded lines per character, for the page."""
+        info = {}
+        for key, c in CHARACTERS.items():
+            name = c.get("library")
+            if name and os.path.exists(os.path.join(LIBRARY_DIR, name + ".json")):
+                lib = self.libraries.get(name) or Library(name)
+                info[key] = {"lines": len(lib.recorded(lib.lines)), "fast": len(lib.recorded(lib.fast))}
+        return info
+
+    def from_library(self, lib, lid):
+        """A recorded line ready to play: (text, (audio, type, cost, voice)), with the character's effect."""
+        audio, kind = lib.audio(lid), "audio/mpeg"
+        styled = self.add_effect(audio)
+        self.store.used[lid] = time.time()
+        self.store.save()
+        return lib.text(lid), (styled or audio, kind, 0.0, f"{self.character()['name']} library")
 
     def write(self, model, image, context, recent, tags):
         """Returns (line, cost in dollars). Raises on any API problem."""
@@ -375,26 +549,53 @@ class Voice:
         return self.piper_wav(plain, PIPER_VOICE), "audio/wav", 0.0, "Piper (backup)"
 
     async def make_line(self, image, note=""):
-        """Returns (line, source, cost). note: extra context for Claude (e.g. "they're still here")."""
+        """Returns (line, source, cost, sound or None). note: extra context for Claude (e.g. "they're still
+        here"). With a library mode, sound is the recorded line; otherwise None (speak the line)."""
         s = self.store
         s.roll_day()
         model = s.settings["model"]
+        lib = self.library() if s.settings["lineSource"] != "live" and not note else None
+        if lib:
+            ids = lib.choices(datetime.datetime.now(), s.used)
+            if s.settings["lineSource"] == "random" or self.client is None:
+                lid = random.choice(ids)
+                text, sound = await asyncio.to_thread(self.from_library, lib, lid)
+                return text, f"library: {lid} (random)", 0.0, sound
+            if s.today["count"] < s.settings["dailyCap"]:
+                try:
+                    every = lib.choices(datetime.datetime.now(), {})   # stable list, for the cache
+                    answer, cost = await asyncio.to_thread(self.pick, model, image, lib, every,
+                                                           time_of_day(datetime.datetime.now()))
+                    s.today["count"] += 1
+                    s.today["cost"] += cost
+                    s.save()
+                except Exception as e:
+                    print(f"Voice: {e}")
+                    answer, cost = random.choice(ids), 0.0
+                if answer.upper() == SKIP:
+                    return SKIP, model, cost, None
+                if answer in lib.lines:
+                    text, sound = await asyncio.to_thread(self.from_library, lib, answer)
+                    return text, f"library: {answer} (picked by {model.replace('claude-', '')})", cost, sound
+                print(f"Voice: picker said {answer!r}, writing a live line instead")   # NONE: nothing fit
+                line, source, cost2, _ = await self.make_line(image, " ")
+                return line, source + " (nothing in the library fit)", cost + cost2, None
         if self.client is None:
-            return random.choice(CANNED), "canned (no key)", 0.0
+            return random.choice(CANNED), "canned (no key)", 0.0, None
         if s.today["count"] >= s.settings["dailyCap"]:
-            return random.choice(CANNED), "canned (daily limit reached)", 0.0
+            return random.choice(CANNED), "canned (daily limit reached)", 0.0, None
         recent = [h["text"] for h in self.history[-8:] if h.get("played")]
         try:
             line, cost = await asyncio.to_thread(self.write, model, image,
-                                                 time_of_day(datetime.datetime.now()) + note, recent,
+                                                 time_of_day(datetime.datetime.now()) + note.rstrip(), recent,
                                                  self.eleven_key is not None)
         except Exception as e:
             print(f"Voice: {e}")
-            return random.choice(CANNED), "canned (Claude unavailable)", 0.0
+            return random.choice(CANNED), "canned (Claude unavailable)", 0.0, None
         s.today["count"] += 1
         s.today["cost"] += cost
         s.save()
-        return line, model, cost
+        return line, model, cost, None
 
     # ---- Deciding when to talk ----
     async def status(self, text):
@@ -421,6 +622,7 @@ class Voice:
                 await asyncio.sleep(SETTLE)
             reached = {"talk": False}
             first = None
+            speed = None   # their own heights per second: walkers ~0.6-1, joggers 1.5-2.5, bikes 3+
             while True:
                 p = self.same_person(pid)
                 if p is None:
@@ -430,9 +632,19 @@ class Voice:
                 if in_any(p["box"], s["talkZones"]):
                     reached["talk"] = True
                 fx, fy = feet(p["box"])
-                first = first or (fx, fy)
-                moved = ((fx - first[0]) ** 2 + (fy - first[1]) ** 2) ** 0.5 >= 0.25 * (p["box"][3] - p["box"][1])
-                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or not s["mustMove"])):
+                height = p["box"][3] - p["box"][1]
+                first = first or (time.time(), fx, fy)
+                dist = ((fx - first[1]) ** 2 + (fy - first[2]) ** 2) ** 0.5
+                moved = dist >= 0.25 * height
+                if time.time() - first[0] >= 0.4 and height > 0:   # long enough to judge their speed
+                    speed = round(dist / height / (time.time() - first[0]), 1)
+                    if s["maxSpeed"] and speed > s["maxSpeed"] and not now_or_never:
+                        if s["fastLines"] and await self.fast_line(pid, speed, t0, reached["talk"]):
+                            return
+                        await self.status(f"#{pid} too fast ({speed} heights/s, a bike?), no line")
+                        return
+                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or not s["mustMove"])
+                                    and (speed is not None or not s["maxSpeed"])):
                     break
                 if time.time() - t0 > s["zoneWait"]:
                     why = "stayed in a no-photo zone" if in_any(p["box"], s["noPhotoZones"]) else "never moved"
@@ -444,6 +656,7 @@ class Voice:
                 await self.status("No camera picture yet")
                 return
             t_photo = time.time()
+            photo = await asyncio.to_thread(self.keep_photo, image, pid)
             await self.status(f"Making a line for #{pid}...")
 
             # 2. Write and speak it, noting if they walk through a talk zone meanwhile.
@@ -459,11 +672,14 @@ class Voice:
                 if followup:
                     note = (f" This person is STILL standing here, {followup[0]} seconds after you said to them:"
                             f" {json.dumps(followup[1])}. Call out that they're still here; don't repeat that line.")
-                line, source, cost = await self.make_line(image, note)
+                line, source, cost, sound = await self.make_line(image, note)
                 if followup:
                     source += " (still here)"
-                sound = None
-                if line.strip().upper().rstrip(".") != SKIP:
+                if line.strip().upper().rstrip(".") == SKIP:
+                    sound = None
+                elif sound:
+                    source += f", {sound[3]}"
+                else:
                     sound = await asyncio.to_thread(self.speak, line)   # (audio, type, cost, voice)
                     if sound[2]:
                         cost += sound[2]
@@ -478,7 +694,8 @@ class Voice:
             self.line_number += 1
             entry = {"n": self.line_number, "text": line, "source": source, "cost": cost, "played": False,
                      "time": datetime.datetime.now().strftime("%-I:%M:%S %p"),
-                     "seconds": {"photo": round(t_photo - t0, 1), "ready": round(t_ready - t_photo, 1)}}
+                     "seconds": {"photo": round(t_photo - t0, 1), "ready": round(t_ready - t_photo, 1)},
+                     "speed": speed, "photo": photo}
             if sound is None:
                 entry["skipped"] = "nobody there"
             else:
@@ -492,28 +709,17 @@ class Voice:
                             break
                         await asyncio.sleep(0.1)
                 if go:
-                    self.audio[self.line_number] = sound[:2]
-                    for n in [n for n in self.audio if n < self.line_number - 30]:
-                        del self.audio[n]
                     entry["played"] = True
                     entry["seconds"]["waited"] = round(time.time() - t_ready, 1)
-                    self.last_spoken = time.time()
                     if followup is None:
                         self.spoken_to[pid] = (time.time(), line)
-                    if self.on_play:
-                        self.on_play(sound[0], sound[1], line)   # e.g. the recorder adds it to the clip
-                    self.talks[self.line_number] = {"env": await asyncio.to_thread(loudness, sound[0]),
-                                                    "cues": cues_in(line)}
-                    for n in [n for n in self.talks if isinstance(n, int) and n < self.line_number - 30]:
-                        del self.talks[n]
-                    await self.send_speakers({"type": "play", "n": self.line_number})
-                    if not any(sp.get("connected") for sp in self.speakers.values()):
-                        await self.eye_talk(self.line_number)   # no yard speaker: in time with the phone
+                    await self.play(line, sound)
                 else:
                     entry["skipped"] = "never reached a talk zone"
             entry["seconds"]["total"] = round(time.time() - t0, 1)
             self.history.append(entry)
             del self.history[:-50]
+            self.save_history()
             what = "played" if entry["played"] else f"not played: {entry['skipped']}"
             print(f'Voice #{pid}: "{line}" ({source}, {what}, {entry["seconds"]}, ${cost:.4f})')
             await self.send({"type": "voice_line", **entry, "today": self.store.today})
@@ -570,12 +776,90 @@ class Voice:
         return {"type": "voice_hello", "settings": self.store.settings, "today": self.store.today,
                 "history": self.history[-20:], "models": list(MODELS),
                 "characters": {k: c["name"] for k, c in CHARACTERS.items()},
+                "libraries": self.library_info(),
                 "hasKey": self.client is not None, "hasEleven": self.eleven_key is not None,
                 "speakers": self.speaker_list()}
+
+    async def play(self, line, sound):
+        """Play line number self.line_number: on the yard speaker (and phones), the eye acts it out,
+        and the recorder adds it to the clip."""
+        self.audio[self.line_number] = sound[:2]
+        for n in [n for n in self.audio if n < self.line_number - 30]:
+            del self.audio[n]
+        self.last_spoken = time.time()
+        if self.on_play:
+            self.on_play(sound[0], sound[1], line)   # e.g. the recorder adds it to the clip
+        self.talks[self.line_number] = asyncio.create_task(self.talk_info(sound[0], line))
+        for n in [n for n in self.talks if isinstance(n, int) and n < self.line_number - 30]:
+            del self.talks[n]
+        await self.send_speakers({"type": "play", "n": self.line_number, "kind": sound[1],
+                                  "audio": base64.standard_b64encode(sound[0]).decode()})
+        if not any(sp.get("connected") for sp in self.speakers.values()):
+            await self.eye_talk(self.line_number)   # no yard speaker: in time with the phone
+
+    async def fast_line(self, pid, speed, t0, passed_zone=False):
+        """Someone zooming past (bike, scooter): a quick random recorded line. No photo, no AI.
+        Plays right away, or (fastWhen = "zone") when they reach a talk zone."""
+        lib = self.library()
+        ids = lib.choices(datetime.datetime.now(), self.store.used, fast=True) if lib else []
+        if not ids:
+            return False
+        lid = random.choice(ids)
+        line, sound = await asyncio.to_thread(self.from_library, lib, lid)
+        zones = self.store.settings["talkZones"]
+        if self.store.settings["fastWhen"] == "zone" and zones and not passed_zone:
+            until = time.time() + FAST_ZONE_WAIT
+            while time.time() < until:
+                q = self.read_person()
+                if not q["present"] or q["id"] != pid or in_any(q["box"], zones):
+                    break   # in the zone, or leaving the picture: play now
+                await asyncio.sleep(0.05)
+        self.line_number += 1
+        await self.play(line, sound)
+        entry = {"n": self.line_number, "text": line, "source": f"fast rider: {lid}", "cost": 0.0, "played": True,
+                 "time": datetime.datetime.now().strftime("%-I:%M:%S %p"), "speed": speed,
+                 "seconds": {"photo": 0.0, "ready": 0.0, "waited": 0.0, "total": round(time.time() - t0, 1)}}
+        self.history.append(entry)
+        del self.history[:-50]
+        self.save_history()
+        print(f'Voice #{pid}: "{line}" (fast rider at {speed} heights/s, played, {entry["seconds"]["total"]}s)')
+        await self.send({"type": "voice_line", **entry, "today": self.store.today})
+        return True
+
+    def save_history(self):
+        tmp = self.history_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.history[-50:], f)
+        os.replace(tmp, self.history_path)
+
+    def keep_photo(self, image, pid):
+        """Save the photo a line was based on (shown next to the line on the Live tab); delete old ones."""
+        os.makedirs(self.photo_dir, exist_ok=True)
+        name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{pid}.jpg"
+        image.save(os.path.join(self.photo_dir, name), "JPEG", quality=85)
+        cutoff = time.time() - PHOTO_DAYS * 86400
+        for f in os.listdir(self.photo_dir):
+            path = os.path.join(self.photo_dir, f)
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+        return name
+
+    async def photo_handler(self, request):
+        from aiohttp import web
+        name = request.match_info["name"]
+        path = os.path.join(self.photo_dir, name)
+        if "/" in name or ".." in name or not name.endswith(".jpg") or not os.path.isfile(path):
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
+
+    async def talk_info(self, audio, text):
+        return {"env": await asyncio.to_thread(loudness, audio), "cues": cues_in(text)}
 
     async def eye_talk(self, n):
         """Tell the eye pages to act out line n, starting now (they add their own sync delay)."""
         talk = self.talks.get(n)
+        if isinstance(talk, asyncio.Task):
+            talk = await talk
         if not talk or not self.send_eye or (n, round(time.time())) in self.talked:
             return
         self.talked = {k for k in self.talked if time.time() - k[1] < 30} | {(n, round(time.time()))}
@@ -664,3 +948,16 @@ class Voice:
         if found is None:
             raise web.HTTPNotFound()
         return web.Response(body=found[0], content_type=found[1])
+
+
+if __name__ == "__main__":
+    # Record a character's library of lines with ElevenLabs (once; only missing lines unless --redo):
+    #   .venv/bin/python voice.py --record-library witch [--redo]
+    import sys
+    if len(sys.argv) >= 3 and sys.argv[1] == "--record-library":
+        character = next((c for c in CHARACTERS.values() if c.get("library") == sys.argv[2]), None)
+        if not character:
+            sys.exit(f"No character uses the library {sys.argv[2]!r}")
+        record_library(sys.argv[2], character["voice"], redo="--redo" in sys.argv)
+    else:
+        print(__doc__)

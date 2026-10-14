@@ -56,6 +56,9 @@
   .meta { font-size: 13px; font-weight: 400; color: var(--dim); margin-top: 4px; }
   .log li { display: block; }
   .log li.skipped { opacity: .5; }
+  .log li.withphoto { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: start; }
+  .log li .lphoto { width: 64px; height: 96px; object-fit: cover; border-radius: 6px; background: #000; cursor: zoom-in; }
+  .log li .lphoto.big { grid-column: 1 / -1; width: 100%; height: auto; max-height: 70vh; object-fit: contain; cursor: zoom-out; }
   .log li button { margin-top: 6px; }
 
   /* aim */
@@ -208,6 +211,19 @@
   <details open>
     <summary>Character</summary>
     <div class="set"><div class="set-top"><span class="label">Character</span><select data-v="character"></select></div></div>
+    <div class="set"><div class="set-top"><span class="label">Lines</span><select data-v="lineSource">
+      <option value="library">Recorded: Claude picks (fast)</option>
+      <option value="live">Written live (slowest)</option>
+      <option value="random">Recorded: random (fastest, free)</option></select></div>
+      <p class="help" id="vLibInfo"></p></div>
+    <div class="set"><div class="set-top"><span class="label">Fast riders (bikes, scooters)</span><select data-v="fastLines">
+      <option value="true">Quick recorded line</option>
+      <option value="false">Say nothing</option></select></div></div>
+    <div class="set"><div class="set-top"><span class="label">Fast riders: when to talk</span><select data-v="fastWhen">
+      <option value="now">Right away</option>
+      <option value="zone">At the talk zone</option></select></div>
+      <p class="help">At the talk zone: the line waits for them to reach a talk zone (up to 3 seconds), so it plays
+        as they pass the speaker. If they already went through one, it plays right away.</p></div>
     <div class="set"><div class="set-top"><span class="label">Writer (Claude model)</span><select data-v="model">
       <option value="claude-sonnet-5-5">Sonnet 5.5 (faster)</option>
       <option value="claude-opus-5-5">Opus 5.5</option></select></div></div>
@@ -224,6 +240,10 @@
       <input type="number" data-v="lingerSeconds" min="0" max="600" inputmode="numeric"></div>
       <p class="help">If someone is still standing there this long after their line, the eye says one more thing
         about them sticking around. Only once per person. 0 = off.</p></div>
+    <div class="set"><div class="set-top"><span class="label">Skip anyone faster than (heights/second)</span>
+      <input type="number" data-v="maxSpeed" min="0" max="20" step="0.1" inputmode="decimal"></div>
+      <p class="help">Speed in the person's own heights per second: walking is about 0.6–1, jogging 1.5–2.5,
+        bikes 3 or more. Faster than this = no line (and no cost). Each line shows its speed. 0 = off.</p></div>
     <div class="set"><div class="set-top"><span class="label">Seconds between lines</span>
       <input type="number" data-v="cooldown" min="0" max="600" inputmode="numeric"></div></div>
     <div class="set"><div class="set-top"><span class="label">Seconds to wait for a photo / talk zone</span>
@@ -486,7 +506,8 @@ player.onended = () => { vPlaying = false; $('vNow').classList.remove('playing')
 
 function vMeta(e) {
   const s = e.seconds, cost = e.cost ? ` · $${e.cost.toFixed(4)}` : '';
-  let t = `photo after ${s.photo}s, line ready ${s.ready}s later`;
+  let t = (e.speed != null ? `speed ${e.speed}, ` : '') +
+    (e.source.startsWith('fast rider') ? `played after ${s.total}s` : `photo after ${s.photo}s, line ready ${s.ready}s later`);
   if (s.waited) t += `, waited ${s.waited}s for a talk zone`;
   return `${e.time} · ${e.source}${cost} · ${t}` + (e.played ? '' : ` · NOT PLAYED: ${e.skipped}`);
 }
@@ -497,16 +518,25 @@ function vAddLine(e, play) {
     $('vNow').lastChild.textContent = vMeta(e);
   }
   const li = document.createElement('li');
-  if (!e.played) li.className = 'skipped';
-  li.innerHTML = '<div></div><div class="meta"></div>';
-  li.children[0].textContent = e.text;
-  li.children[1].textContent = vMeta(e);
+  if (!e.played) li.classList.add('skipped');
+  const body = document.createElement('div');
+  body.innerHTML = '<div></div><div class="meta"></div>';
+  body.children[0].textContent = e.text;
+  body.children[1].textContent = vMeta(e);
   if (e.played) {
     const b = document.createElement('button');
     b.textContent = 'Play on this phone';
     b.onclick = () => { player.src = `/voice/audio/${e.n}`; player.play(); };
-    li.append(b);
+    body.append(b);
   }
+  if (e.photo) {   // the photo the line was based on: tap to enlarge
+    li.classList.add('withphoto');
+    const img = document.createElement('img');
+    img.className = 'lphoto'; img.alt = 'What the eye saw'; img.src = '/voice/photo/' + e.photo;
+    img.onclick = () => img.classList.toggle('big');
+    li.append(img);
+  }
+  li.append(body);
   $('vLog').prepend(li);
   while ($('vLog').children.length > 30) $('vLog').lastChild.remove();
   if (play && e.played) { vQueue.push(e.n); vPlayNext(); }
@@ -516,6 +546,7 @@ function voiceMessage(m) {
     const sel = document.querySelector('[data-v=character]');
     sel.innerHTML = '';
     for (const [value, label] of Object.entries(m.characters)) sel.add(new Option(label, value));
+    vLibraries = m.libraries || {};
     vShowSettings(m.settings);
     vShowToday(m.today);
     $('vLog').innerHTML = '';
@@ -556,11 +587,21 @@ function vShowSettings(s) {
   drawAreas();
   document.querySelectorAll('[data-v]').forEach(el => {
     if (document.activeElement === el) return;
-    if (el.type === 'checkbox') el.checked = s[el.dataset.v]; else el.value = s[el.dataset.v];
+    if (el.type === 'checkbox') el.checked = s[el.dataset.v]; else el.value = String(s[el.dataset.v]);
   });
+  vShowLibrary();
+}
+let vLibraries = {};
+function vShowLibrary() {
+  if (!vSettings) return;
+  const lib = vLibraries[vSettings.character];
+  $('vLibInfo').textContent = lib
+    ? `This character has ${lib.lines} recorded lines (+ ${lib.fast} for fast riders). Recorded lines skip the voice step: about 2 seconds faster, and only Claude's small cost (none for random).`
+    : 'This character has no recorded lines yet, so it always writes live.';
 }
 document.querySelectorAll('[data-v]').forEach(el => el.onchange = () => {
-  const value = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : Number(el.value);
+  let value = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : Number(el.value);
+  if (value === 'true' || value === 'false') value = value === 'true';
   send({ type: 'voice_setting', key: el.dataset.v, value });
 });
 $('vSay').onclick = () => send({ type: 'voice_say' });

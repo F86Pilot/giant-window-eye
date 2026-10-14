@@ -41,6 +41,8 @@ BEFORE, AFTER = 5, 3     # seconds of video kept before someone appears and afte
 GONE_AFTER = 2.5         # seconds without seeing them before a visit counts as over
 MAX_VISIT = 180          # longest clip, in seconds
 STOP_SECONDS = 3         # standing still this long = "stopped to look"
+MERGE_GAP = 3            # a "new" person this soon after one vanished, near the same spot, is the same visit
+                         # (the tracker sometimes loses someone for a moment and gives them a new number)
 
 # sound = the camera's microphone. zones = shapes (lists of [x, y] corners, 0-1 in the camera picture):
 # a visit is only saved if the person's feet were inside one at some point. No zones = save every visit.
@@ -80,6 +82,7 @@ class Recorder:
         for f in glob.glob(os.path.join(self.ring, "*.ts")):
             os.remove(f)   # old pieces from before a restart
         self.visit = None
+        self.ended = None        # the visit that just ended (it may turn out to continue, see MERGE_GAP)
         self.saving = []         # visits that ended but whose clip isn't made yet (keep their pieces)
         self.lines = []          # (time played, audio bytes, content type, text) from the voice
         self.problem = None      # why recording isn't working, shown on the page
@@ -159,8 +162,8 @@ class Recorder:
                 v = self.visit
                 if p["present"] and p["box"] and (v is None or p["id"] == v["id"]):
                     if v is None:
-                        v = self.visit = {"id": p["id"], "start": now, "seen": now, "track": [], "still": 0.0,
-                                          "zoneTime": 0.0}
+                        v = self.visit = self.continued(p, now) or {
+                            "id": p["id"], "start": now, "seen": now, "track": [], "still": 0.0, "zoneTime": 0.0}
                     step = now - v["seen"]
                     v["seen"] = now
                     x1, y1, x2, y2 = p["box"]
@@ -172,14 +175,34 @@ class Recorder:
                 if v and (now - v["seen"] > GONE_AFTER or now - v["start"] > MAX_VISIT
                           or (p["present"] and p["id"] != v["id"])):
                     self.visit = None
+                    v["maxed"] = now - v["start"] > MAX_VISIT
+                    self.ended = v
                     if self.worth_saving(v):
-                        asyncio.create_task(self.save_later(v))
+                        v["task"] = asyncio.create_task(self.save_later(v))
                 if now - last_clean > 5:
                     last_clean = now
                     self.clean_ring()
             except Exception:
                 traceback.print_exc()
                 await asyncio.sleep(2)
+
+    def continued(self, p, now):
+        """If this "new" person is really the one who just vanished (soon after, near the same spot),
+        pick their visit back up instead of starting a second clip."""
+        old = self.ended
+        if not old or old.get("maxed") or now - old["seen"] > MERGE_GAP or not old["track"]:
+            return None
+        _, x, y, h = old["track"][-1]
+        x1, y1, x2, y2 = p["box"]
+        if ((x1 + x2) / 2 - x) ** 2 + (y2 - y) ** 2 > (1.5 * h) ** 2:
+            return None
+        if old.get("task"):
+            old["task"].cancel()   # its clip isn't made yet: it becomes part of this one
+            old.pop("task")
+        self.ended = None
+        old["id"] = p["id"]
+        print(f"Recordings: person #{p['id']} is the same visit, continuing the clip")
+        return old
 
     def worth_saving(self, v):
         """Long enough in a recording area, and (if mustMove) actually moved."""
@@ -221,10 +244,13 @@ class Recorder:
             if clip:
                 print(f"Recordings: saved {clip['file']}" + (" (stopped to look)" if clip["stopped"] else ""))
                 await self.send({"type": "rec_clip", "clip": clip, "usage": self.usage()})
+        except asyncio.CancelledError:
+            pass   # the visit continued (see continued)
         except Exception:
             traceback.print_exc()
         finally:
-            self.saving.remove(v)
+            if v in self.saving:
+                self.saving.remove(v)
 
     def save(self, v):
         if not self.can_write():

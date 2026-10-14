@@ -13,6 +13,7 @@ Settings come from the environment (set in eye-speaker.service):
   SPEAKER_MAC   the Bluetooth speaker's address, e.g. AA:BB:CC:11:22:33
 """
 import asyncio
+import base64
 import io
 import json
 import os
@@ -113,6 +114,11 @@ async def fetch_and_play(session, path, on_start=None):
     return ok
 
 
+async def play_now(audio, kind, n, on_start):
+    ok = await play(audio, kind, on_start)
+    log(f"played line {n}" if ok else f"couldn't play line {n} (is the speaker connected?)")
+
+
 async def keep_speaker(send_status):
     """Reconnect the speaker when it's back, keep it awake, and report its state."""
     global connected
@@ -163,7 +169,10 @@ async def main():
                         msg = json.loads(m.data)
                         def started(n):
                             return lambda: ws.send_str(json.dumps({"type": "started", "n": n}))
-                        if msg.get("type") == "play":
+                        if msg.get("type") == "play" and msg.get("audio"):   # the line itself came with the message
+                            asyncio.create_task(play_now(base64.b64decode(msg["audio"]), msg.get("kind", ""),
+                                                         msg["n"], started(msg["n"])))
+                        elif msg.get("type") == "play":
                             asyncio.create_task(fetch_and_play(session, f"/voice/audio/{msg['n']}", started(msg["n"])))
                         elif msg.get("type") == "test":
                             asyncio.create_task(fetch_and_play(session, f"/voice/preview?t={time.time()}",

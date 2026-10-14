@@ -539,6 +539,7 @@ def main():
         app.router.add_get("/voice/audio/{n}", voice.audio_handler)
         app.router.add_get("/voice/preview", voice.preview_handler)
         app.router.add_get("/voice/speaker", voice.speaker_handler)
+        app.router.add_get("/voice/photo/{name}", voice.photo_handler)
     if recorder:
         app.router.add_get("/recordings/{day}/{name}", recorder.file_handler)
     app.router.add_static("/", "web")

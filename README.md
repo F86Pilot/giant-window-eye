@@ -48,8 +48,9 @@ your own network. **With the voice on**, each line sends:
 - a small cropped photo of the person to **Claude** (Anthropic) to write the joke, and
 - the line's text to **ElevenLabs** to speak it.
 
-Recordings are saved only on the Mac. The voice never comments on bodies, faces, age,
-race or gender, and keeps it kid-friendly.
+Recordings, and the photo each line was based on (shown on the phone page for checking the
+voice's picks, kept 14 days), are saved only on the Mac. The voice never comments on bodies,
+faces, age, race or gender, and keeps it kid-friendly.
 
 ## What you need
 
@@ -133,6 +134,28 @@ after that it says free canned lines until midnight.
 *Witch*, a voice from ElevenLabs' Voice Library (library voices need a paid ElevenLabs
 plan or prepaid credits). Add your own in `CHARACTERS` at the top of `voice.py`.
 
+**Recorded lines (faster and cheaper).** A character can have a library of pre-recorded
+lines: the Witch's ~95 (`voice/library/witch.json`) cover clothing colors and types, phones,
+coffee, dogs, strollers, kids, pairs and groups, waving, jogging, time of day and October.
+Record them once (about $0.40 of ElevenLabs credit, a couple of minutes):
+```bash
+.venv/bin/python voice.py --record-library witch
+```
+Then under Settings → Voice → *Lines*, choose:
+- **Recorded: Claude picks** — Claude looks at the photo and picks the best-fitting line
+  (by priority: pets/strollers/kids/bikes, then what they're doing, then clothing). About
+  1–1.5 s faster than writing live and ~$0.0014 a line. If nothing fits something remarkable,
+  it writes a live line instead.
+- **Written live** — Claude writes a fresh line and ElevenLabs speaks it (slowest, most specific).
+- **Recorded: random** — instant and free, but not about the person.
+
+**Fast riders:** people faster than a set speed (in their own heights per second; bikes are
+~3+) get a quick random line from the library's "fast" set, with no photo and no AI, either
+right away or when they reach a talk zone.
+
+The recordings aren't in git (they're made with your ElevenLabs account and the voice's own
+license terms apply); edit a line's text and run the command again with `--redo` to re-record.
+
 ### 5. A speaker in the yard (optional)
 The lines can also play on the phone page, but for passersby to hear them you want a
 speaker outside. A Pi Zero 2 W inside a window streams them to a Bluetooth speaker hidden
@@ -162,8 +185,9 @@ Open `http://<tracker-computer-ip>:8085/calibrate`:
 
 <p align="center"><img src="docs/phone-controls.jpg" alt="The phone control page, Settings tab: tabs for Live, Areas, Settings, Recordings and Aim, with the eye's settings in folding sections" width="300"></p>
 
-- **Live:** the camera view, yard speaker status, the line being said and recent lines,
-  *Say something now*, *Test yard speaker*, today's cost, and buttons to make the eye react.
+- **Live:** the camera view, yard speaker status, the line being said and recent lines (each
+  with the photo it was based on, its speed and timing), *Say something now*, *Test yard
+  speaker*, today's cost, and buttons to make the eye react.
 - **Areas:** draw shapes on the camera picture (tap the corners), all on one view:
   - **Ignored** (gray): things the camera mistakes for a person (a mailbox, a bush).
     Also *Ignore what's in the yellow box*.
@@ -186,7 +210,7 @@ Open `http://<tracker-computer-ip>:8085/calibrate`:
 On by default. Each visit becomes a clip from a few seconds before the person appears
 until they've left, with the eye's line as sound. To cut false alarms, a visit only counts
 if they spent a few seconds in a recording area and actually moved (a flickering mailbox
-doesn't). Clips go to `recordings/` next to `tracker.py`; to use another folder, put its
+doesn't). If the camera briefly loses someone and picks them up again nearby, it stays one clip. Clips go to `recordings/` next to `tracker.py`; to use another folder, put its
 path in `recordings_folder.txt`. Old clips are deleted automatically (default: after 30 days
 or over 20 GB). The camera's own video is copied without re-encoding, so recording doesn't
 slow anything down and uses the same single camera connection.
@@ -215,10 +239,13 @@ slow anything down and uses the same single camera connection.
   it's already following even at low confidence, so it doesn't lose them in the dark.
 - **Wyze cameras sometimes ignore the first connection** while their Wi-Fi wakes up; the
   tracker just retries.
-- **Speed of the voice.** About 4 s from someone appearing to the line playing. Claude is
-  the slow step: *Sonnet 5.5* writes a line in ~1.3 s, *Opus 5.5* in ~3–5 s (pick under
-  Settings → Voice). The line is prepared as soon as someone appears and held until they
-  reach a talk zone, or played right away if they already walked through it.
+- **Speed of the voice.** With recorded lines, about 2.5 s from someone appearing to the
+  line being ready (0.6 s waiting to see them move, then Claude picking); written live, about
+  3.5–4 s (Claude ~1.5 s, ElevenLabs ~1.2 s). *Sonnet 5.5* is much faster than *Opus 5.5*
+  (Settings → Voice). The line is prepared as soon as someone appears and held until they
+  reach a talk zone, or played right away if they already walked through it. Turning
+  Claude's thinking off didn't help; caching the list of recorded lines did (and cut the
+  picking cost ~7x).
 - **Crackly Bluetooth audio on a Pi Zero.** Its Wi-Fi and Bluetooth share one radio. Medium
   Bluetooth audio quality (SBC "medium", set by `speaker/install.sh`) fixed it; Wi-Fi power
   saving and bigger buffers didn't.
@@ -232,7 +259,8 @@ slow anything down and uses the same single camera connection.
 | `tracker.py` | Reads the camera, detects and follows people, serves the pages |
 | `calibration.py` | Turns "where the camera sees you" into "where the eye looks" (from saved spots); ignored areas |
 | `settings.py` | The eye settings on the phone page, with allowed ranges |
-| `voice.py` | The voice: photo → Claude → ElevenLabs (or Piper), talk/no-photo zones, characters |
+| `voice.py` | The voice: photo → Claude → ElevenLabs (or Piper), recorded-line libraries, talk/no-photo zones, characters |
+| `voice/library/` | Each character's pre-recorded lines (the text; the recordings are made locally) |
 | `recorder.py` | A video clip of each visit |
 | `web/index.html` | The eye (canvas, drawn live) |
 | `web/config.js` | Starting values for the eye settings |
@@ -242,7 +270,8 @@ slow anything down and uses the same single camera connection.
 | `speaker/` | Yard speaker for a Raspberry Pi Zero 2 W with a Bluetooth speaker |
 
 Not in git: `camera_url.txt`, `anthropic_key.txt`, `elevenlabs_key.txt`, saved calibration,
-areas and settings (`data/`), downloaded voices (`voice/voices/`) and clips (`recordings/`).
+areas, settings, line history and photos (`data/`), downloaded voices (`voice/voices/`),
+recorded lines (`voice/library/*/`) and clips (`recordings/`).
 
 To try the eye without a camera, open the eye page with `?mouse` at the end of the
 address: it follows your mouse or finger, and has buttons for the reactions.

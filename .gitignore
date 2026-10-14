@@ -25,3 +25,6 @@ elevenlabs_key.txt
 # Recordings (video of passersby) and where to keep them: stay on this computer
 recordings/
 recordings_folder.txt
+
+# Recorded line libraries (made with your ElevenLabs account; the text lists are in git)
+voice/library/*/
