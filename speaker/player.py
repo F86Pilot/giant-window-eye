@@ -18,6 +18,7 @@ import io
 import json
 import os
 import random
+import re
 import socket
 import struct
 import subprocess
@@ -49,6 +50,12 @@ def bluetooth(*args, timeout=20):
 
 def speaker_connected():
     return "Connected: yes" in bluetooth("info", SPEAKER)
+
+
+def battery():
+    """The speaker's battery percentage, if it reports one (over its hands-free connection), else None."""
+    m = re.search(r"Battery Percentage: 0x[0-9a-fA-F]+ \((\d+)\)", bluetooth("info", SPEAKER))
+    return int(m.group(1)) if m else None
 
 
 def device_name():
@@ -135,7 +142,7 @@ async def keep_speaker(send_status):
             connected = now_connected
             if connected and time.time() - last_sound > KEEP_AWAKE_EVERY:
                 await play(quiet, "audio/wav")
-            report = (connected,)
+            report = (connected, await asyncio.to_thread(battery) if connected else None)
             if report != last_report:
                 last_report = report
                 await send_status()
@@ -152,7 +159,8 @@ async def main():
         ws = ws_holder.get("ws")
         if ws is not None and not ws.closed:
             await ws.send_str(json.dumps({"type": "status", "name": name, "connected": connected,
-                                          "device": await asyncio.to_thread(device_name)}))
+                                          "device": await asyncio.to_thread(device_name),
+                                          "battery": await asyncio.to_thread(battery) if connected else None}))
 
     await asyncio.to_thread(bluetooth, "power", "on")
     asyncio.create_task(keep_speaker(send_status))

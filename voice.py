@@ -892,9 +892,11 @@ class Voice:
                 except (TypeError, ValueError):
                     continue
                 if msg.get("type") == "status":
+                    level = msg.get("battery")
                     self.speakers[ws] = {"name": str(msg.get("name", "speaker"))[:40],
                                          "connected": bool(msg.get("connected")),
-                                         "device": str(msg.get("device", ""))[:40]}
+                                         "device": str(msg.get("device", ""))[:40],
+                                         "battery": level if isinstance(level, int) and 0 <= level <= 100 else None}
                     await self.send({"type": "voice_speakers", "speakers": self.speaker_list()})
                 elif msg.get("type") == "started":
                     n = msg.get("n")

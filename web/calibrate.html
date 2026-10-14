@@ -576,8 +576,10 @@ function voiceMessage(m) {
 function vShowSpeakers(list) {
   const el = $('vSpeaker');
   if (!list || !list.length) { el.innerHTML = '<b class="bad">Yard speaker: not connected</b> (the Pi is off or can\'t reach this computer)'; return; }
+  const battery = s => s.battery == null ? '' : s.battery <= 20
+    ? `, <b class="bad">🪫 ${s.battery}%: charge it soon</b>` : `, 🔋 ${s.battery}%`;
   el.innerHTML = list.map(s => s.connected
-    ? `<b class="ok">Yard speaker: ready</b> (${s.device || 'Bluetooth'})`
+    ? `<b class="ok">Yard speaker: ready</b> (${s.device || 'Bluetooth'}${battery(s)})`
     : `<b class="bad">Yard speaker: Bluetooth speaker off or out of range</b> (the Pi keeps trying)`).join('<br>');
 }
 function vShowToday(t) { if (t) $('vToday').textContent = `Today: ${t.count} Claude lines, $${t.cost.toFixed(3)}`; }

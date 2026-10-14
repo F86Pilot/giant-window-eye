@@ -14,11 +14,14 @@ bluetoothctl trust "$MAC" >/dev/null
 
 # Medium Bluetooth audio quality: the Pi Zero's Wi-Fi and Bluetooth share one radio, and the
 # default (high) crackles; medium sounded best in testing.
+# hfp-ag + Bluetooth's (experimental) battery reporting: many speakers report their battery
+# over the hands-free connection, and it's shown on the phone page. Music still uses A2DP.
+sudo sed -i "s/^#Experimental = false/Experimental = true/" /etc/bluetooth/main.conf
 sudo mkdir -p /etc/systemd/system/bluealsa.service.d
-printf "[Service]\nExecStart=\nExecStart=/usr/bin/bluealsa -S -p a2dp-source -p a2dp-sink --sbc-quality=medium\n" \
+printf "[Service]\nExecStart=\nExecStart=/usr/bin/bluealsa -S -p a2dp-source -p a2dp-sink -p hfp-ag --sbc-quality=medium\n" \
   | sudo tee /etc/systemd/system/bluealsa.service.d/quality.conf >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl restart bluealsa
+sudo systemctl restart bluetooth bluealsa
 
 sed -e "s|__EYE_SERVER__|$SERVER|" -e "s|__SPEAKER_MAC__|$MAC|" eye-speaker.service \
   | sudo tee /etc/systemd/system/eye-speaker.service >/dev/null

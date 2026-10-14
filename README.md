@@ -177,7 +177,9 @@ in the yard.
 
 It starts at boot, reconnects to the speaker whenever it's turned back on, and plays a
 nearly silent sound every few minutes so the speaker doesn't switch itself off. Its status
-shows on the phone page (*Yard speaker: ready*), with a *Test yard speaker* button. When it
+shows on the phone page (*Yard speaker: ready (Soundcore 3, 🔋 72%)*), with a *Test yard
+speaker* button. The battery level comes over the speaker's hands-free connection (many
+speakers report it there); it turns red at 20%. When it
 plays a line it tells the eye, so the eye's pupil pulses in time with the words.
 
 ### 6. Aim and tune it from your phone
