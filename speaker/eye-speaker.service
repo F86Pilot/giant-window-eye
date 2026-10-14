@@ -1,0 +1,18 @@
+# Giant Eye yard speaker (speaker/player.py) as a service on the Raspberry Pi.
+# Installed by speaker/install.sh, which fills in the two settings below.
+[Unit]
+Description=Giant Eye yard speaker
+After=network-online.target bluetooth.service bluealsa.service
+Wants=network-online.target
+
+[Service]
+User=pi
+Environment=EYE_SERVER=__EYE_SERVER__
+Environment=SPEAKER_MAC=__SPEAKER_MAC__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /home/pi/eye-speaker/player.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

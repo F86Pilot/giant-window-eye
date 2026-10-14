@@ -85,10 +85,21 @@ class Calibration:
         self.cy = _fit([ones, [q["y"] for q in p], sizes], [q["ly"] for q in p], DEFAULT_Y)
 
 
+def _inside(x, y, zone):
+    if isinstance(zone[0], (int, float)):   # rectangle from the yellow box
+        return zone[0] <= x <= zone[2] and zone[1] <= y <= zone[3]
+    hit = False                            # drawn shape: ray-crossing test
+    for (x1, y1), (x2, y2) in zip(zone, zone[1:] + zone[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            hit = not hit
+    return hit
+
+
 class IgnoreZones:
     """Spots in the camera view where things that look like people aren't
-    (a mailbox, a statue). Added from the calibration page. Positions are
-    fractions of the camera picture (0 to 1)."""
+    (a mailbox, a statue). Added from the calibration page, either from the yellow
+    box ([x1, y1, x2, y2]) or drawn by hand as a shape (a list of [x, y] corners).
+    Positions are fractions of the camera picture (0 to 1)."""
 
     def __init__(self, path):
         self.path = path
@@ -103,7 +114,24 @@ class IgnoreZones:
             print(f"Couldn't read {path}, starting with none: {e}")
 
     def contains(self, x, y):
-        return any(z[0] <= x <= z[2] and z[1] <= y <= z[3] for z in self.zones)
+        return any(_inside(x, y, z) for z in self.zones)
+
+    def add_shape(self, corners):
+        """A hand-drawn shape. Returns False if it isn't a sensible shape."""
+        try:
+            pts = [[round(min(1, max(0, float(px))), 4), round(min(1, max(0, float(py))), 4)] for px, py in corners]
+        except (TypeError, ValueError):
+            return False
+        if not 3 <= len(pts) <= 40:
+            return False
+        self.zones.append(pts)
+        self._save()
+        return True
+
+    def delete(self, index):
+        if 0 <= index < len(self.zones):
+            del self.zones[index]
+            self._save()
 
     def add(self, x1, y1, x2, y2, pad=0.25):
         # Make the spot a bit bigger than the box, since detections jiggle around.

@@ -1,11 +1,13 @@
 # Giant Eye
 
-A giant eyeball in your window that watches people walk by.
+A giant eyeball in your window that watches people walk by, and talks to them.
 
 A camera outside spots people, and a TV in the window shows a big glowing eye whose
 gaze follows them. It blinks, glances around when nobody's there, rolls its eyes now
-and then, does double-takes, and slowly shifts through the colors of the rainbow.
-Everything runs on your own network; nothing goes to the cloud.
+and then, and slowly shifts through the colors of the rainbow. Optionally it also
+**says a funny line to each passerby** (written by Claude from a photo of them, spoken
+by ElevenLabs on a speaker in the yard, with the eye pulsing in time with the words),
+and **records a short clip of each visit** with what it said.
 
 <p align="center">
   <img src="docs/house-at-dusk.jpg" alt="The eye glowing green in a round upstairs window at dusk" width="520">
@@ -26,15 +28,28 @@ Up close, the eye looks like this:
 Security camera (RTSP) ──► tracker.py on a Mac
                               • finds people (YOLO), locks onto one person
                               • turns their position into "where the eye looks"
+                              • voice.py: photo of the person → Claude writes a line
+                                → ElevenLabs speaks it (optional)
+                              • recorder.py: a video clip of each visit (optional)
                               • serves the web pages
                                    │
-          ┌────────────────────────┼─────────────────────────┐
-          ▼                        ▼                         ▼
-   Eye page on the TV       Phone control page        Camera debug view
-   (Raspberry Pi kiosk)     /calibrate                /debug
+     ┌──────────────────────┬──────┴──────────────┬──────────────────────┐
+     ▼                      ▼                     ▼                      ▼
+Eye page on the TV    Phone control page    Yard speaker            Camera debug view
+(Raspberry Pi kiosk)  /calibrate            (Pi Zero + Bluetooth)   /debug
 ```
 
 The eye is drawn live in a web browser, so you can try it on any laptop or phone first.
+
+### Privacy: what leaves your network
+
+Without the voice, nothing does: the camera, detection, eye and recordings all stay on
+your own network. **With the voice on**, each line sends:
+- a small cropped photo of the person to **Claude** (Anthropic) to write the joke, and
+- the line's text to **ElevenLabs** to speak it.
+
+Recordings are saved only on the Mac. The voice never comments on bodies, faces, age,
+race or gender, and keeps it kid-friendly.
 
 ## What you need
 
@@ -46,6 +61,11 @@ The eye is drawn live in a web browser, so you can try it on any laptop or phone
 - **A screen in the window**, driven by a **Raspberry Pi 4** running Chromium in kiosk mode
   (or any device with a browser, like an old iPad, for testing).
 - **A phone** for aiming the eye and changing settings while standing outside.
+- *For the voice (optional):* an [Anthropic API key](https://console.anthropic.com/) and an
+  [ElevenLabs API key](https://elevenlabs.io/). Without ElevenLabs it uses a free voice on
+  the Mac (Piper); without Anthropic it says canned lines.
+- *For a speaker in the yard (optional):* a **Raspberry Pi Zero 2 W** near a window and a
+  **Bluetooth speaker** (tested with an Anker Soundcore 3).
 
 ## Setup
 
@@ -90,21 +110,93 @@ Plug the TV into the micro-HDMI port next to the power port.
 The Pi runs the screen at **720p** on purpose: a Pi 4 draws this eye at ~40 frames per
 second at 720p but only ~16 at 1080p. The TV scales it up.
 
-### 4. Aim and tune it from your phone
+### 4. The voice (optional)
+Save your API keys next to `tracker.py` (both files are in `.gitignore`). This asks for
+each key without showing it:
+```bash
+read -s "k?Anthropic key: " && printf %s "$k" > anthropic_key.txt && chmod 600 anthropic_key.txt && unset k
+```
+```bash
+read -s "k?ElevenLabs key: " && printf %s "$k" > elevenlabs_key.txt && chmod 600 elevenlabs_key.txt && unset k
+```
+Then download the free backup voice (used if ElevenLabs fails or has no key):
+```bash
+.venv/bin/python -m piper.download_voices --download-dir voice/voices en_US-ryan-high
+```
+Restart the tracker. On the phone page, **Live** shows each line as it's said.
+
+**Cost** (pay-as-you-go API prices): about **$0.005–0.01 per line** in total (Claude Sonnet
+~$0.002, ElevenLabs v4 Turbo ~$0.003–0.004). A daily limit (default 150 lines) caps it;
+after that it says free canned lines until midnight.
+
+**Characters:** *George (spooky)*, a built-in ElevenLabs voice with a ghostly effect, and
+*Witch*, a voice from ElevenLabs' Voice Library (library voices need a paid ElevenLabs
+plan or prepaid credits). Add your own in `CHARACTERS` at the top of `voice.py`.
+
+### 5. A speaker in the yard (optional)
+The lines can also play on the phone page, but for passersby to hear them you want a
+speaker outside. A Pi Zero 2 W inside a window streams them to a Bluetooth speaker hidden
+in the yard.
+
+1. Flash **Raspberry Pi OS Lite (64-bit)** with Raspberry Pi Imager: hostname `eye-speaker`,
+   your Wi-Fi, and SSH turned on.
+2. Pair the speaker on the Pi (put the speaker in pairing mode first):
+   ```bash
+   sudo rfkill unblock bluetooth
+   bluetoothctl
+   # then in bluetoothctl: agent NoInputNoOutput / default-agent / scan on /
+   #   pair <speaker address> / trust <speaker address> / connect <speaker address> / quit
+   ```
+3. Copy the `speaker/` folder to the Pi as `~/eye-speaker`, then:
+   ```bash
+   ~/eye-speaker/install.sh http://<tracker-computer>.local:8085 <speaker address>
+   ```
+
+It starts at boot, reconnects to the speaker whenever it's turned back on, and plays a
+nearly silent sound every few minutes so the speaker doesn't switch itself off. Its status
+shows on the phone page (*Yard speaker: ready*), with a *Test yard speaker* button. When it
+plays a line it tells the eye, so the eye's pupil pulses in time with the words.
+
+### 6. Aim and tune it from your phone
 Open `http://<tracker-computer-ip>:8085/calibrate`:
 
-<p align="center"><img src="docs/phone-controls.jpg" alt="The phone control page: camera view with the followed person in a yellow box, and the Aim / Settings / Test tabs" width="300"></p>
+<p align="center"><img src="docs/phone-controls.jpg" alt="The phone control page, Settings tab: tabs for Live, Areas, Settings, Recordings and Aim, with the eye's settings in folding sections" width="300"></p>
 
+- **Live:** the camera view, yard speaker status, the line being said and recent lines,
+  *Say something now*, *Test yard speaker*, today's cost, and buttons to make the eye react.
+- **Areas:** draw shapes on the camera picture (tap the corners), all on one view:
+  - **Ignored** (gray): things the camera mistakes for a person (a mailbox, a bush).
+    Also *Ignore what's in the yellow box*.
+  - **Talk** (orange): the line plays once someone's feet are inside. Put one by the speaker.
+  - **No-photo** (blue): the voice waits to take its photo while they're inside (far edges,
+    where people are too small for a good joke).
+  - **Recording** (green): a clip is only saved if they entered one (leave out the road).
+  - *Detection sensitivity*: how sure the camera must be that something is a person.
+- **Settings:** the eye (position and size, with an alignment guide; look; color; movement;
+  blinking; moods; how it moves while talking), the voice (character, Claude model, when to
+  talk, cost limit) and recordings. Changes take effect instantly and are saved.
+- **Recordings:** watch, save or delete clips; filter to people who *stopped to look*.
 - **Aim:** stand in the yard, drag the eye until it looks right at you, and tap
   *Save this spot*. Do 4–6 spots (left, right, near, far). The camera usually isn't where
-  the eye is, and this corrects for it. Also: *Ignore what's in the yellow box* for things
-  the camera mistakes for a person (a mailbox, a statue).
-- **Settings:** position and size (to line the eye up with your window, with an
-  alignment guide), iris and pupil size, brightness, color drift, movement, blinking,
-  moods and detection sensitivity. Changes show on the TV instantly and are saved.
-- **Test:** make the eye sleep, startle, roll its eyes or do a double-take right now.
+  the eye is, and this corrects for it.
 
 `/debug` shows what the camera sees: yellow box = person being followed.
+
+### Recordings
+On by default. Each visit becomes a clip from a few seconds before the person appears
+until they've left, with the eye's line as sound. To cut false alarms, a visit only counts
+if they spent a few seconds in a recording area and actually moved (a flickering mailbox
+doesn't). Clips go to `recordings/` next to `tracker.py`; to use another folder, put its
+path in `recordings_folder.txt`. Old clips are deleted automatically (default: after 30 days
+or over 20 GB). The camera's own video is copied without re-encoding, so recording doesn't
+slow anything down and uses the same single camera connection.
+
+- **External drive:** the root background service can't write to `/Volumes/...` unless
+  you give its Python *Full Disk Access* (System Settings → Privacy & Security).
+- **Sound:** *Record sound* (off by default) adds the camera's microphone. It can pick up
+  passersby talking, and recording conversations you're not part of can be restricted by
+  law where you live, even in one-party-consent states. Put up a visible "audio and video
+  recording" sign before turning it on.
 
 ## Tips from building it
 
@@ -123,21 +215,34 @@ Open `http://<tracker-computer-ip>:8085/calibrate`:
   it's already following even at low confidence, so it doesn't lose them in the dark.
 - **Wyze cameras sometimes ignore the first connection** while their Wi-Fi wakes up; the
   tracker just retries.
+- **Speed of the voice.** About 4 s from someone appearing to the line playing. Claude is
+  the slow step: *Sonnet 5.5* writes a line in ~1.3 s, *Opus 5.5* in ~3–5 s (pick under
+  Settings → Voice). The line is prepared as soon as someone appears and held until they
+  reach a talk zone, or played right away if they already walked through it.
+- **Crackly Bluetooth audio on a Pi Zero.** Its Wi-Fi and Bluetooth share one radio. Medium
+  Bluetooth audio quality (SBC "medium", set by `speaker/install.sh`) fixed it; Wi-Fi power
+  saving and bigger buffers didn't.
+- **Static objects.** Things mistaken for a person don't move, so the voice only talks
+  (and recordings only save) once someone's feet have moved.
 
 ## Files
 
 | File | What it does |
 |---|---|
 | `tracker.py` | Reads the camera, detects and follows people, serves the pages |
-| `calibration.py` | Turns "where the camera sees you" into "where the eye looks" (from saved spots) |
-| `settings.py` | The settings on the phone page, with allowed ranges |
+| `calibration.py` | Turns "where the camera sees you" into "where the eye looks" (from saved spots); ignored areas |
+| `settings.py` | The eye settings on the phone page, with allowed ranges |
+| `voice.py` | The voice: photo → Claude → ElevenLabs (or Piper), talk/no-photo zones, characters |
+| `recorder.py` | A video clip of each visit |
 | `web/index.html` | The eye (canvas, drawn live) |
-| `web/config.js` | Starting values for the settings |
-| `web/calibrate.html` | Phone page: aim, settings, test reactions |
+| `web/config.js` | Starting values for the eye settings |
+| `web/calibrate.html` | Phone page: live view, areas, settings, recordings, aim |
 | `mac/` | Background-service setup for a Mac |
-| `pi/` | Kiosk setup for a Raspberry Pi |
+| `pi/` | Kiosk setup for a Raspberry Pi (the TV) |
+| `speaker/` | Yard speaker for a Raspberry Pi Zero 2 W with a Bluetooth speaker |
 
-Saved calibration, ignored spots and settings live in `data/` (not in git).
+Not in git: `camera_url.txt`, `anthropic_key.txt`, `elevenlabs_key.txt`, saved calibration,
+areas and settings (`data/`), downloaded voices (`voice/voices/`) and clips (`recordings/`).
 
 To try the eye without a camera, open the eye page with `?mouse` at the end of the
 address: it follows your mouse or finger, and has buttons for the reactions.
@@ -145,7 +250,10 @@ address: it follows your mouse or finger, and has buttons for the reactions.
 ## Credits
 
 Person detection and tracking: [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
-(YOLO11n) with ByteTrack. Built with a lot of help from Claude.
+(YOLO11n) with ByteTrack. Lines written by [Claude](https://www.anthropic.com/claude) (Anthropic),
+spoken by [ElevenLabs](https://elevenlabs.io/), with [Piper](https://github.com/OHF-Voice/piper1-gpl)
+as the free backup voice. Bluetooth audio on the Pi: [BlueALSA](https://github.com/arkq/bluez-alsa).
+Built with a lot of help from Claude.
 
 ## License
 

@@ -65,6 +65,21 @@ SCHEMA = [
     {"key": "doubleTakeChance", "group": "Moods", "label": "Double-take chance", "kind": "range",
      "min": 0, "max": 1, "step": 0.05, "help": "Chance when someone new shows up."},
 
+    # Talking (when the voice says a line)
+    {"key": "talkAnim", "group": "Talking", "label": "Move while talking", "kind": "toggle",
+     "help": "The pupil and iris pulse with the words. Cues add reactions: whispers narrow the eye, "
+             "laughs make it jiggle, sarcastic lines end in an eye roll."},
+    {"key": "talkDelay", "group": "Talking", "label": "Sync delay (seconds)", "kind": "range",
+     "min": 0, "max": 1.5, "step": 0.05,
+     "help": "If the eye moves before you hear the words, raise this; if after, lower it. "
+             "Use \"Test yard speaker\" on the Voice tab to check."},
+    {"key": "talkPulse", "group": "Talking", "label": "Pulse strength", "kind": "range",
+     "min": 0, "max": 1, "step": 0.05,
+     "help": "How much the pupil (black center) and iris grow with each syllable."},
+    {"key": "talkJiggle", "group": "Talking", "label": "Laugh jiggle", "kind": "range",
+     "min": 0, "max": 1, "step": 0.05,
+     "help": "How much the eye shakes up and down on lines with a laugh or cackle. 0 = no shaking."},
+
     # Detection (used by tracker.py, not the eye page)
     {"key": "detectConfidence", "group": "Detection", "label": "Detection sensitivity", "kind": "range",
      "min": 0.15, "max": 0.7, "step": 0.01,

@@ -37,7 +37,13 @@ window.EYE_CONFIG = {
   moods: true,             // false = no eye rolls or double-takes
   drowsySec: 6,            // Sleep test button: how long it fights to stay awake before its eyes close
   eyeRollChance: 0.04,     // chance of an eye roll each time it glances around while idle (0 to 1)
-  doubleTakeChance: 0.4,   // chance of a double-take when someone new shows up (0 to 1)
+  doubleTakeChance: 0,     // chance of a double-take when someone new shows up (0 to 1; 0 = never)
+
+  // ---- Talking (when the voice says a line) --------------------------------
+  talkAnim: true,          // pupil and iris pulse with the words; cues like [whispers] add reactions
+  talkDelay: 0.35,         // seconds to wait before moving, to line up with the yard speaker's sound
+  talkPulse: 0.7,          // how strongly the pupil and iris pulse (0 = not at all)
+  talkJiggle: 0.5,         // how much the eye shakes up and down on [laughs]/[cackles] lines (0 = not at all)
 
   // ---- Aiming --------------------------------------------------------------
   // Where the eye looks for a given person is set on the calibration page:

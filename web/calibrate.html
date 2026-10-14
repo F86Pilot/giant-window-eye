@@ -1,18 +1,64 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Giant Eye Controls</title>
 <style>
-  :root { --bg: #111; --panel: #1c1c1c; --text: #eee; --dim: #999; --accent: #ff8a3d; --ok: #5c5; --bad: #e66; }
+  :root { --bg: #111; --panel: #1c1c1c; --text: #eee; --dim: #999; --accent: #ff8a3d; --ok: #5c5; --bad: #e66;
+          --z-ignore: #aaa; --z-talk: #ff8a3d; --z-nophoto: #59f; --z-record: #5c5; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 -apple-system, system-ui, sans-serif;
-         padding: 12px 16px 40px; max-width: 520px; margin-inline: auto; -webkit-user-select: none; user-select: none; }
+         padding: 12px 16px 60px; max-width: 520px; margin-inline: auto; -webkit-user-select: none; user-select: none; }
   h1 { font-size: 20px; margin: 4px 0 8px; }
-  .cam { width: 100%; border-radius: 8px; background: #000; aspect-ratio: 16/9; object-fit: contain; display: block; }
-  .status { margin: 8px 0 12px; padding: 8px 10px; border-radius: 8px; background: var(--panel); font-size: 15px; }
-  .status b.ok { color: var(--ok); } .status b.bad { color: var(--bad); }
+  h2 { font-size: 16px; margin: 20px 0 6px; color: var(--dim); font-weight: 600; }
+  .help { color: var(--dim); font-size: 14px; margin: 0 0 10px; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 14px; width: 100%; margin: 0 0 10px;
+           background: #333; color: var(--text); }
+  button.primary { background: var(--accent); color: #000; font-weight: 600; }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 10px; } .row button { flex: 1; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .grid2 button { margin: 0; }
+  .status { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: var(--panel); font-size: 15px; }
+  b.ok { color: var(--ok); } b.bad { color: var(--bad); }
+  ol { margin: 0; padding: 0; list-style: none; }
+  li { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--panel);
+       border-radius: 8px; padding: 6px 6px 6px 12px; margin-bottom: 6px; font-size: 14px; }
+  li button { width: auto; margin: 0; padding: 6px 12px; background: #2a2a2a; flex: none; }
+  .toast { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); max-width: 90vw; z-index: 20;
+           background: #222; border-radius: 10px; padding: 10px 14px; font-size: 15px; box-shadow: 0 4px 20px #000;
+           display: none; }
+  .toast.ok { color: var(--ok); } .toast.bad { color: var(--bad); }
+
+  /* tabs */
+  .tabs { display: flex; gap: 6px; margin: 0 0 12px; position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 6px 0; }
+  .tabs button { flex: 1 1 auto; width: auto; margin: 0; padding: 12px 8px; background: var(--panel); color: var(--dim);
+                 font-weight: 600; font-size: 15px; }
+  .tabs button.on { background: var(--accent); color: #000; }
+  .tab { display: none; } .tab.on { display: block; }
+
+  /* camera view, with the areas drawn on top */
+  .cambox { position: relative; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 16/9;
+            touch-action: none; margin: 0 0 10px; }
+  .cambox img, .cambox svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .cambox img { object-fit: fill; pointer-events: none; }
+  .feet { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+          background: #fff; border: 3px solid #888; display: none; pointer-events: none; }
+  .feet.talk { border-color: var(--z-talk); } .feet.nophoto { border-color: var(--z-nophoto); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--dim); margin: 0 0 10px; }
+  .legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  /* live */
+  .now { background: var(--panel); border-radius: 12px; padding: 16px; margin: 0 0 10px; min-height: 80px;
+         font-size: 20px; line-height: 1.3; font-weight: 600; }
+  .now.playing { box-shadow: 0 0 0 2px var(--accent); }
+  .meta { font-size: 13px; font-weight: 400; color: var(--dim); margin-top: 4px; }
+  .log li { display: block; }
+  .log li.skipped { opacity: .5; }
+  .log li button { margin-top: 6px; }
+
+  /* aim */
   .pad { position: relative; width: 100%; aspect-ratio: 1; border-radius: 50%; background: radial-gradient(#2a2a2a, #161616);
          border: 2px solid #333; touch-action: none; margin: 4px 0 12px; }
   .pad.active { border-color: var(--accent); }
@@ -24,44 +70,24 @@
          background: var(--accent); box-shadow: 0 0 12px var(--accent); pointer-events: none; }
   .pad .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                text-align: center; padding: 20%; color: var(--dim); pointer-events: none; }
-  button { font: inherit; border: 0; border-radius: 10px; padding: 14px; width: 100%; margin: 0 0 10px;
-           background: #333; color: var(--text); }
-  button.primary { background: var(--accent); color: #000; font-weight: 600; }
-  button:disabled { opacity: .4; }
-  .row { display: flex; gap: 10px; } .row button { flex: 1; }
-  .toast { min-height: 1.4em; text-align: center; margin: 0 0 10px; }
-  .toast.ok { color: var(--ok); } .toast.bad { color: var(--bad); }
-  h2 { font-size: 16px; margin: 18px 0 6px; color: var(--dim); font-weight: 600; }
-  ol { margin: 0; padding: 0; list-style: none; }
-  li { display: flex; align-items: center; justify-content: space-between; background: var(--panel);
-       border-radius: 8px; padding: 6px 6px 6px 12px; margin-bottom: 6px; font-size: 14px; }
-  li button { width: auto; margin: 0; padding: 6px 12px; background: #2a2a2a; }
-  .help { color: var(--dim); font-size: 14px; }
-  .react { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
-  .react button { margin: 0; }
 
-  /* tabs */
-  .tabs { display: flex; gap: 6px; margin: 0 0 12px; position: sticky; top: 0; z-index: 5;
-          background: var(--bg); padding: 6px 0; }
-  .tabs button { margin: 0; padding: 10px 4px; background: var(--panel); color: var(--dim); font-weight: 600;
-                 font-size: 14px; line-height: 1.2; }
-  .tabs button.on { background: var(--accent); color: #000; }
-  .tab { display: none; } .tab.on { display: block; }
-
-  /* settings */
+  /* settings: one look for every setting (eye, voice, recordings) */
   details { background: var(--panel); border-radius: 10px; margin-bottom: 10px; }
   summary { padding: 14px; font-weight: 600; cursor: pointer; }
-  .set { padding: 4px 14px 14px; border-top: 1px solid #2a2a2a; }
+  .set { padding: 4px 14px 12px; border-top: 1px solid #2a2a2a; }
   .set-top { display: flex; align-items: center; gap: 8px; min-height: 44px; }
   .set-top .label { flex: 1; }
   .set-top .val { font-variant-numeric: tabular-nums; color: var(--accent); min-width: 3.5em; text-align: right; }
   .set-top .reset { width: auto; margin: 0; padding: 6px 10px; font-size: 13px; background: #2a2a2a; }
   .set-top .reset.hidden { visibility: hidden; }
+  .set-top input[type=number], .set-top select { font: inherit; background: #2a2a2a; color: var(--text); border: 0;
+         border-radius: 8px; padding: 8px; width: 7.5em; text-align: right; -webkit-user-select: text; user-select: text; }
+  .set-top select { width: auto; max-width: 13em; }
   .set-ctl { display: flex; align-items: center; gap: 8px; }
   .set-ctl .step { width: 52px; height: 48px; margin: 0; padding: 0; font-size: 24px; flex: none; touch-action: manipulation; }
   input[type=range] { flex: 1; height: 48px; margin: 0; accent-color: var(--accent); touch-action: pan-y; }
   input[type=range]::-webkit-slider-thumb { width: 30px; height: 30px; }
-  .set .help { margin: 6px 0 0; font-size: 13px; }
+  .set .help { margin: 4px 0 0; font-size: 13px; }
   .switch { position: relative; width: 58px; height: 34px; flex: none; }
   .switch input { opacity: 0; width: 0; height: 0; }
   .switch span { position: absolute; inset: 0; background: #444; border-radius: 34px; transition: .2s; }
@@ -69,166 +95,242 @@
                          background: #fff; border-radius: 50%; transition: .2s; }
   .switch input:checked + span { background: var(--accent); }
   .switch input:checked + span::before { transform: translateX(24px); }
+  .section { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 22px 0 8px; }
+  .section:first-child { margin-top: 0; }
+  details .inner { padding: 0 14px 12px; }
 
-  /* voice tab */
-  .vnow { background: var(--panel); border-radius: 12px; padding: 16px; margin: 0 0 10px; min-height: 80px;
-          font-size: 20px; line-height: 1.3; font-weight: 600; }
-  .vnow.playing { box-shadow: 0 0 0 2px var(--accent); }
-  .vmeta { font-size: 13px; font-weight: 400; color: var(--dim); margin-top: 4px; }
-  .zonebox { position: relative; border-radius: 8px; overflow: hidden; background: #000; aspect-ratio: 16/9;
-             touch-action: none; margin: 0 0 10px; }
-  .zonebox img, .zonebox svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-  .zonebox img { object-fit: fill; pointer-events: none; }
-  .zonebox .feet { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
-                   background: #fff; border: 3px solid #888; display: none; pointer-events: none; }
-  .zonebox .feet.talk { border-color: var(--ok); } .zonebox .feet.nophoto { border-color: #59f; }
-  .zt { color: var(--accent); } .zn { color: #59f; }
-  .vset { background: var(--panel); border-radius: 10px; padding: 0 14px; margin-bottom: 10px; }
-  .vset label { display: flex; align-items: center; gap: 10px; min-height: 54px; border-bottom: 1px solid #2a2a2a; }
-  .vset label:last-child { border-bottom: 0; }
-  .vset label > span:first-child { flex: 1; }
-  .vset input[type=number], .vset select { font: inherit; background: #2a2a2a; color: var(--text); border: 0;
-         border-radius: 8px; padding: 8px; width: 7.5em; text-align: right; -webkit-user-select: text; user-select: text; }
-  .vlog li { display: block; }
-  .vlog li.skipped { opacity: .5; }
-  .vlog li button { margin-top: 6px; }
+  /* recordings */
+  .rfilter { display: flex; gap: 6px; margin-bottom: 10px; }
+  .rfilter button { margin: 0; padding: 10px; font-size: 14px; }
+  .rfilter button.on { background: var(--accent); color: #000; font-weight: 600; }
+  .clips { list-style: none; margin: 0; padding: 0; }
+  .clips li { display: grid; grid-template-columns: 112px 1fr; gap: 10px; align-items: start; padding: 8px; margin-bottom: 8px; }
+  .clips img { width: 112px; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; background: #000; cursor: pointer; }
+  .clips .when { font-size: 14px; font-weight: 600; }
+  .clips .what { font-size: 13px; color: var(--dim); margin-top: 2px; }
+  .clips .stopped { color: var(--accent); font-weight: 600; }
+  .clips .acts { display: flex; gap: 6px; margin-top: 6px; }
+  .clips .acts button { width: auto; margin: 0; padding: 6px 12px; font-size: 13px; background: #2a2a2a; }
+  .clips video { grid-column: 1 / -1; width: 100%; border-radius: 6px; background: #000; }
 </style>
-<script src="config.js"></script>
+<script src="config.js?v=3"></script>
 </head>
 <body>
 <h1>Giant Eye controls</h1>
-<img class="cam" src="/debug.mjpg" alt="Camera view">
 <div class="status" id="status">Connecting…</div>
 
 <div class="tabs">
-  <button data-tab="settings" class="on">Eye settings</button>
-  <button data-tab="voice">Voice settings</button>
-  <button data-tab="aim">Calibrate aim</button>
-  <button data-tab="test">Reactions</button>
+  <button data-tab="live" class="on">Live</button>
+  <button data-tab="areas">Areas</button>
+  <button data-tab="settings">Settings</button>
+  <button data-tab="rec">Recordings</button>
+  <button data-tab="aim">Aim</button>
 </div>
 
-<div class="tab" id="tab-aim">
-<div class="pad" id="pad"><div class="cross"></div><div class="dot" id="dot"></div>
-  <div class="hint" id="hint">Tap “Aim the eye”, then drag here to steer it</div></div>
-
-<div class="toast" id="toast"></div>
-<button class="primary" id="aimBtn">Aim the eye</button>
-<div class="row">
-  <button id="centerBtn">Re-center</button>
-  <button id="saveBtn" disabled>Save this spot</button>
-</div>
-
-<h2>Not a person?</h2>
-<p class="help" style="margin-top:0">If the yellow box is on something that isn't a person (like the mailbox),
-  tap this and the eye will ignore that spot from now on.</p>
-<button id="ignoreBtn" disabled>Ignore what's in the yellow box</button>
-<button id="clearIgnoreBtn">Clear ignored spots</button>
-
-<h2 id="spotsTitle">Saved spots</h2>
-<ol id="spots"></ol>
-<button id="clearBtn">Clear all spots</button>
-
-<p class="help">
-  <b>How to:</b> stand somewhere in the yard. Tap <b>Aim the eye</b>, then drag on the circle until the eye
-  is looking right at you (a helper watching from the street makes this easier). Tap <b>Save this spot</b>.
-  The eye goes back to following you with the improved aim. Repeat at 4–6 spots: left, middle, right, near and far.
-  <br><br>The yellow box in the camera view is the person the eye follows. Make sure it's you.
-</p>
-</div>
-
-<div class="tab on" id="tab-settings">
-  <p class="help" style="margin-top:0">Changes show on the eye right away and are saved.
-    <b>Reset</b> puts a setting back to its default.</p>
-  <div id="settings">Loading…</div>
-</div>
-
-<div class="tab" id="tab-test">
-  <h2 style="margin-top:0">Test reactions</h2>
-  <p class="help" style="margin-top:0">Makes the real eye (TV or iPad) react right now.</p>
-  <div class="react">
-    <button data-react="sleep">😴 Sleep</button>
-    <button data-react="startle">😱 Startle</button>
-    <button data-react="roll">🙄 Eye roll</button>
-    <button data-react="doubletake">👀 Double-take</button>
-    <button data-react="blink">Blink</button>
-  </div>
-</div>
-
-<div class="tab" id="tab-voice">
-  <button class="primary" id="vUnlock">Turn on sound on this phone</button>
-  <div class="vnow" id="vNow">Waiting for someone to walk by…</div>
+<!-- ============================== LIVE ============================== -->
+<div class="tab on" id="tab-live">
+  <div class="cambox" data-cam="live"></div>
+  <div class="status" id="vSpeaker">Yard speaker: checking…</div>
+  <div class="now" id="vNow">Waiting for someone to walk by…</div>
   <div class="status" id="vStatus">&nbsp;</div>
-  <button id="vSay">Say something now</button>
+  <div class="row">
+    <button id="vSay">Say something now</button>
+    <button id="vSpeakerTest">Test yard speaker</button>
+  </div>
+  <button id="vUnlock">Also play lines on this phone</button>
   <p class="help" id="vToday"></p>
 
-  <h2>Zones</h2>
-  <p class="help" style="margin-top:0"><b class="zt">Talk zones</b>: the line plays once someone's feet are inside
-    (or they walked through while it was being made). Put one around the speaker.
-    <b class="zn">No-photo zones</b>: no photo is taken while their feet are inside, e.g. the far edges where people
-    are too small for a good joke. No talk zones = talk anywhere.</p>
-  <div class="zonebox" id="vZoneBox">
-    <img src="/debug.mjpg" alt="Camera view">
-    <svg id="vZones" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
-    <div class="feet" id="vFeet"></div>
+  <h2>Make the eye react</h2>
+  <div class="grid2 react">
+    <button data-react="doubletake">👀 Double-take</button>
+    <button data-react="roll">🙄 Eye roll</button>
+    <button data-react="startle">😱 Startle</button>
+    <button data-react="sleep">😴 Sleep</button>
+    <button data-react="blink">Blink</button>
   </div>
-  <div id="vDrawIdle" class="row">
-    <button id="vDrawTalk">+ Talk zone</button>
-    <button id="vDrawNo">+ No-photo zone</button>
-  </div>
-  <div id="vDrawing" style="display:none">
-    <p class="help" id="vDrawHelp" style="margin-top:0"></p>
-    <div class="row">
-      <button id="vUndo">Undo corner</button>
-      <button id="vCancel">Cancel</button>
-      <button class="primary" id="vDone" disabled>Done</button>
-    </div>
-  </div>
-  <ol id="vZoneList"></ol>
-
-  <h2>Voice settings</h2>
-  <div class="vset">
-    <label><span>Character</span><select data-v="character"></select></label>
-    <label><span>Talk to people</span><span class="switch"><input type="checkbox" data-v="enabled"><span></span></span></label>
-    <label><span>Seconds between lines</span><input type="number" data-v="cooldown" min="0" max="600" inputmode="numeric"></label>
-    <label><span>Seconds to wait for a photo / talk zone</span><input type="number" data-v="zoneWait" min="3" max="120" inputmode="numeric"></label>
-    <label><span>Claude lines per day</span><input type="number" data-v="dailyCap" min="0" max="2000" inputmode="numeric"></label>
-    <label><span>Quiet from (hour, 0–23)</span><input type="number" data-v="quietFrom" min="0" max="23" inputmode="numeric"></label>
-    <label><span>Quiet until (hour, 0–23)</span><input type="number" data-v="quietTo" min="0" max="23" inputmode="numeric"></label>
-    <label><span>Writer</span><select data-v="model"></select></label>
-  </div>
-  <button id="vPreview">▶ Preview character</button>
-  <p class="help">Each line sends a small cropped photo of the person to Claude (Anthropic) to write the joke,
-    and the line's text to ElevenLabs to speak it (a free voice on the Mac takes over if ElevenLabs fails).
-    After the daily limit it uses free canned lines. Set both quiet hours the same to never be quiet.
-    Keep this page open with the screen on; phones stop web audio when the screen locks.</p>
 
   <h2>Recent lines</h2>
-  <ol class="vlog" id="vLog"></ol>
+  <ol class="log" id="vLog"></ol>
 </div>
+
+<!-- ============================== AREAS ============================== -->
+<div class="tab" id="tab-areas">
+  <div class="cambox" data-cam="areas" id="areaBox"><svg class="zones" viewBox="0 0 1 1" preserveAspectRatio="none"></svg><div class="feet"></div></div>
+  <div class="legend">
+    <span><i style="background:var(--z-ignore)"></i>Ignored</span>
+    <span><i style="background:var(--z-talk)"></i>Talk</span>
+    <span><i style="background:var(--z-nophoto)"></i>No-photo</span>
+    <span><i style="background:var(--z-record)"></i>Recording</span>
+  </div>
+  <div id="areaIdle">
+    <div class="grid2">
+      <button data-kind="ignore">+ Ignored area</button>
+      <button data-kind="talk">+ Talk zone</button>
+      <button data-kind="nophoto">+ No-photo zone</button>
+      <button data-kind="record">+ Recording area</button>
+    </div>
+    <button id="ignoreBtn" disabled>Ignore what's in the yellow box</button>
+  </div>
+  <div id="areaDrawing" style="display:none">
+    <p class="help" id="areaHelp"></p>
+    <div class="row">
+      <button id="areaUndo">Undo corner</button>
+      <button id="areaCancel">Cancel</button>
+      <button class="primary" id="areaDone" disabled>Done</button>
+    </div>
+  </div>
+  <ol id="areaList"></ol>
+
+  <h2>What each area does</h2>
+  <p class="help">
+    <b style="color:var(--z-ignore)">Ignored</b>: anything detected here isn't a person (by the middle of its box), for the eye,
+    the voice and recordings. For mailboxes, bushes, shadows.<br>
+    <b style="color:var(--z-talk)">Talk</b>: the line plays once someone's feet are inside (or they walked through while it was
+    being made). Put one by the yard speaker. None = talk anywhere.<br>
+    <b style="color:var(--z-nophoto)">No-photo</b>: the voice waits to take its photo while their feet are inside, e.g. far edges
+    where people are too small for a good joke.<br>
+    <b style="color:var(--z-record)">Recording</b>: a clip is only saved if their feet entered one (e.g. leave out the road).
+    None = record every visit.<br>
+    The white dot on the picture is where the camera thinks the person's feet are.</p>
+
+  <h2>What counts as a person</h2>
+  <div id="areaSettings"></div>
+</div>
+
+<!-- ============================== SETTINGS ============================== -->
+<div class="tab" id="tab-settings">
+  <p class="help">Changes take effect right away and are saved.</p>
+
+  <div class="section">Eye</div>
+  <div id="eyeSettings">Loading…</div>
+
+  <div class="section">Voice</div>
+  <details open>
+    <summary>Character</summary>
+    <div class="set"><div class="set-top"><span class="label">Character</span><select data-v="character"></select></div></div>
+    <div class="set"><div class="set-top"><span class="label">Writer (Claude model)</span><select data-v="model">
+      <option value="claude-sonnet-5-5">Sonnet 5.5 (faster)</option>
+      <option value="claude-opus-5-5">Opus 5.5</option></select></div></div>
+    <div class="inner"><button id="vPreview">▶ Preview character</button></div>
+  </details>
+  <details>
+    <summary>When to talk</summary>
+    <div class="set"><div class="set-top"><span class="label">Talk to people</span>
+      <label class="switch"><input type="checkbox" data-v="enabled"><span></span></label></div></div>
+    <div class="set"><div class="set-top"><span class="label">Skip things that don't move</span>
+      <label class="switch"><input type="checkbox" data-v="mustMove"><span></span></label></div>
+      <p class="help">Only talk once their feet have moved a little, so bushes and mailboxes never get a line.</p></div>
+    <div class="set"><div class="set-top"><span class="label">"Still here?" line after (seconds)</span>
+      <input type="number" data-v="lingerSeconds" min="0" max="600" inputmode="numeric"></div>
+      <p class="help">If someone is still standing there this long after their line, the eye says one more thing
+        about them sticking around. Only once per person. 0 = off.</p></div>
+    <div class="set"><div class="set-top"><span class="label">Seconds between lines</span>
+      <input type="number" data-v="cooldown" min="0" max="600" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Seconds to wait for a photo / talk zone</span>
+      <input type="number" data-v="zoneWait" min="3" max="120" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Quiet from (hour, 0–23)</span>
+      <input type="number" data-v="quietFrom" min="0" max="23" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Quiet until (hour, 0–23)</span>
+      <input type="number" data-v="quietTo" min="0" max="23" inputmode="numeric"></div>
+      <p class="help">Set both the same to never be quiet.</p></div>
+  </details>
+  <details>
+    <summary>Cost limit</summary>
+    <div class="set"><div class="set-top"><span class="label">Claude lines per day</span>
+      <input type="number" data-v="dailyCap" min="0" max="2000" inputmode="numeric"></div>
+      <p class="help">After this, it uses free canned lines until midnight.</p></div>
+    <div class="inner"><p class="help" style="margin:0">Each line sends a small cropped photo of the person to Claude
+      (Anthropic) to write the joke, and the line's text to ElevenLabs to speak it (a free voice on the Mac takes over if
+      ElevenLabs fails).</p></div>
+  </details>
+
+  <div class="section">Recordings</div>
+  <details>
+    <summary>Recording</summary>
+    <div class="set"><div class="set-top"><span class="label">Record visits</span>
+      <label class="switch"><input type="checkbox" data-r="enabled"><span></span></label></div></div>
+    <div class="set"><div class="set-top"><span class="label">Seconds in a recording area</span>
+      <input type="number" data-r="minSeconds" min="0" max="60" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Skip things that don't move</span>
+      <label class="switch"><input type="checkbox" data-r="mustMove"><span></span></label></div>
+      <p class="help">Only save visits where their feet moved at least their own height.</p></div>
+    <div class="set"><div class="set-top"><span class="label">Record sound (camera microphone)</span>
+      <label class="switch"><input type="checkbox" data-r="sound"><span></span></label></div>
+      <p class="help">Can pick up passersby talking. Recording conversations you're not part of can be restricted by
+        law: put up a visible "audio and video recording" sign before turning this on.</p></div>
+  </details>
+  <details>
+    <summary>Storage</summary>
+    <div class="set"><div class="set-top"><span class="label">Keep clips for (days)</span>
+      <input type="number" data-r="keepDays" min="1" max="365" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Space limit (GB)</span>
+      <input type="number" data-r="maxGB" min="1" max="200" inputmode="numeric"></div>
+      <p class="help">The oldest clips are deleted when over either limit. Folder: set in recordings_folder.txt.</p></div>
+  </details>
+</div>
+
+<!-- ============================== CLIPS ============================== -->
+<div class="tab" id="tab-rec">
+  <p class="help" id="rUsage">Loading…</p>
+  <div class="rfilter">
+    <button data-f="all" class="on">All</button>
+    <button data-f="stopped">Stopped to look</button>
+    <button data-f="line">The eye spoke</button>
+  </div>
+  <ul class="clips" id="rClips"></ul>
+  <p class="help">A clip covers a few seconds before someone appears until they've left, with the eye's line as sound.
+    <b>Stopped to look</b> = they stood still for 3+ seconds.</p>
+</div>
+
+<!-- ============================== AIM ============================== -->
+<div class="tab" id="tab-aim">
+  <div class="cambox" data-cam="aim"></div>
+  <div class="pad" id="pad"><div class="cross"></div><div class="dot" id="dot"></div>
+    <div class="hint" id="hint">Tap “Aim the eye”, then drag here to steer it</div></div>
+  <button class="primary" id="aimBtn">Aim the eye</button>
+  <div class="row">
+    <button id="centerBtn">Re-center</button>
+    <button id="saveBtn" disabled>Save this spot</button>
+  </div>
+  <h2 id="spotsTitle">Saved spots</h2>
+  <ol id="spots"></ol>
+  <button id="clearBtn">Clear all spots</button>
+  <p class="help">
+    <b>How to:</b> stand somewhere in the yard. Tap <b>Aim the eye</b>, then drag on the circle until the eye
+    is looking right at you (a helper watching from the street makes this easier). Tap <b>Save this spot</b>.
+    The eye goes back to following you with the improved aim. Repeat at 4–6 spots: left, middle, right, near and far.
+    The yellow box in the camera view is the person the eye follows. Make sure it's you.
+  </p>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
 const $ = id => document.getElementById(id);
-let ws, aiming = false, aim = { x: 0, y: 0 }, last = null, sendTimer = null;
-
-// Drag sensitivity: dragging across the whole circle moves the eye this many "eye widths".
-// Lower = finer control.
-const SENSITIVITY = 1.0;
+let ws, last = null;
 
 function connect() {
   ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/calws');
   ws.onmessage = e => {
     const m = JSON.parse(e.data);
     if (m.type === 'status') showStatus(m);
-    if (m.type === 'settings') showSettings(m);
-    if (m.type.startsWith('voice_')) voiceMessage(m);
-    if (m.type === 'saved') {
-      toast(m.msg, m.ok);
-      if (m.ok) setAiming(false);
-    }
+    else if (m.type === 'settings') showSettings(m);
+    else if (m.type === 'saved') { toast(m.msg, m.ok); if (m.ok) setAiming(false); }
+    else if (m.type.startsWith('voice_')) voiceMessage(m);
+    else if (m.type.startsWith('rec_')) recMessage(m);
   };
   ws.onclose = () => { $('status').textContent = 'Lost connection, retrying…'; setAiming(false); setTimeout(connect, 1500); };
 }
 const send = obj => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+
+let toastTimer;
+function toast(text, ok) {
+  $('toast').textContent = text;
+  $('toast').className = 'toast ' + (ok ? 'ok' : 'bad');
+  $('toast').style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('toast').style.display = 'none'; }, 3500);
+}
 
 function showStatus(m) {
   last = m;
@@ -236,9 +338,312 @@ function showStatus(m) {
   $('status').innerHTML = p
     ? `<b class="ok">Camera sees person #${p.id}</b> &nbsp;(left-right ${p.x.toFixed(2)}, size ${p.size.toFixed(2)})`
     : `<b class="bad">Camera can't see anyone</b>`;
-  $('saveBtn').disabled = !(aiming && p);
   $('ignoreBtn').disabled = !p;
-  $('clearIgnoreBtn').textContent = `Clear ignored spots (${m.ignored || 0})`;
+  if (m.ignoreZones && JSON.stringify(m.ignoreZones) !== JSON.stringify(areas.ignore)) { areas.ignore = m.ignoreZones; drawAreas(); }
+  showAimStatus(m);
+}
+
+// ---- Tabs, and the one shared camera view ---------------------------------------
+// Only one camera stream: the picture moves to whichever tab is showing, and stops
+// on tabs without a camera view (saves the phone's data and battery).
+const cam = new Image();
+cam.alt = 'Camera view';
+function showCamera(tab) {
+  const box = document.querySelector(`.cambox[data-cam="${tab}"]`);
+  if (!box) { cam.removeAttribute('src'); cam.remove(); return; }
+  box.prepend(cam);
+  if (!cam.getAttribute('src')) cam.src = '/debug.mjpg';
+}
+function openTab(tab) {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x.dataset.tab === tab));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + tab));
+  showCamera(tab);
+  if (tab !== 'areas') stopDrawing();
+  try { localStorage.setItem('eyeTab', tab); } catch (e) {}
+}
+document.querySelector('.tabs').onclick = e => { const b = e.target.closest('button'); if (b) openTab(b.dataset.tab); };
+document.addEventListener('visibilitychange', () => {   // pause the camera while the page is in the background
+  if (document.hidden) { cam.removeAttribute('src'); } else { showCamera(document.querySelector('.tabs button.on').dataset.tab); }
+});
+
+// ---- Areas: every kind on one picture ---------------------------------------------
+// ignore: the server's ignored spots (rectangles from the yellow box, or drawn shapes)
+// talk / nophoto: the voice's zones; record: the recorder's areas
+const KINDS = {
+  ignore:  { name: 'Ignored area',   color: '#aaa', fill: 'rgba(170,170,170,.28)' },
+  record:  { name: 'Recording area', color: '#5c5', fill: 'rgba(92,204,92,.18)' },
+  nophoto: { name: 'No-photo zone',  color: '#59f', fill: 'rgba(85,153,255,.25)' },
+  talk:    { name: 'Talk zone',      color: '#ff8a3d', fill: 'rgba(255,138,61,.25)' },
+};
+const DRAW_ORDER = ['record', 'nophoto', 'talk', 'ignore'];
+const areas = { ignore: [], talk: [], nophoto: [], record: [] };
+let drawing = null;   // { kind, pts }
+
+const corners = z => typeof z[0] === 'number' ? [[z[0], z[1]], [z[2], z[1]], [z[2], z[3]], [z[0], z[3]]] : z;
+function drawAreas() {
+  let svg = '';
+  for (const kind of DRAW_ORDER) for (const z of areas[kind]) {
+    const k = KINDS[kind];
+    svg += `<polygon points="${corners(z).map(q => q.join(',')).join(' ')}" fill="${k.fill}" stroke="${k.color}"
+            stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  }
+  if (drawing) {
+    const k = KINDS[drawing.kind], pts = drawing.pts;
+    if (pts.length > 1) svg += `<polyline points="${pts.map(q => q.join(',')).join(' ')}${pts.length > 2 ? ' ' + pts[0].join(',') : ''}"
+      fill="none" stroke="${k.color}" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
+    for (const [x, y] of pts) svg += `<ellipse cx="${x}" cy="${y}" rx=".012" ry=".021" fill="${k.color}"/>`;
+  }
+  document.querySelectorAll('.cambox svg.zones').forEach(s => s.innerHTML = svg);
+  const items = [];
+  for (const kind of ['ignore', 'talk', 'nophoto', 'record'])
+    areas[kind].forEach((z, i) => items.push(`<li><span><b style="color:${KINDS[kind].color}">${KINDS[kind].name}</b> ${i + 1}` +
+      `${typeof z[0] === 'number' ? ' (from the yellow box)' : ` (${z.length} corners)`}</span>` +
+      `<button data-kind="${kind}" data-i="${i}">Delete</button></li>`));
+  const html = items.join('') || '<p class="help">No areas yet.</p>';
+  if ($('areaList').innerHTML !== html) $('areaList').innerHTML = html;
+}
+function saveArea(kind, shapes) {   // the whole new list for that kind
+  if (kind === 'talk') send({ type: 'voice_setting', key: 'talkZones', value: shapes });
+  if (kind === 'nophoto') send({ type: 'voice_setting', key: 'noPhotoZones', value: shapes });
+  if (kind === 'record') send({ type: 'rec_setting', key: 'zones', value: shapes });
+}
+function addArea(kind, pts) {
+  if (kind === 'ignore') send({ type: 'ignore_shape', corners: pts });
+  else saveArea(kind, [...areas[kind], pts]);
+}
+function deleteArea(kind, i) {
+  if (kind === 'ignore') send({ type: 'ignore_delete', index: i });
+  else saveArea(kind, areas[kind].filter((_, j) => j !== i));
+}
+function drawingHelp() {
+  const n = drawing.pts.length;
+  $('areaHelp').innerHTML = `Drawing a <b style="color:${KINDS[drawing.kind].color}">${KINDS[drawing.kind].name.toLowerCase()}</b>: ` +
+    `tap each corner on the picture (${n} so far${n < 3 ? ', at least 3' : ''}), then Done.`;
+  $('areaDone').disabled = n < 3;
+}
+function stopDrawing() {
+  drawing = null;
+  $('areaIdle').style.display = '';
+  $('areaDrawing').style.display = 'none';
+  drawAreas();
+}
+document.querySelectorAll('#areaIdle [data-kind]').forEach(b => b.onclick = () => {
+  drawing = { kind: b.dataset.kind, pts: [] };
+  $('areaIdle').style.display = 'none';
+  $('areaDrawing').style.display = 'block';
+  drawingHelp(); drawAreas();
+});
+$('areaUndo').onclick = () => { drawing.pts.pop(); drawingHelp(); drawAreas(); };
+$('areaCancel').onclick = stopDrawing;
+$('areaDone').onclick = () => { addArea(drawing.kind, drawing.pts); stopDrawing(); };
+$('areaBox').addEventListener('pointerdown', e => {
+  if (!drawing) return;
+  const b = $('areaBox').getBoundingClientRect();
+  const r = v => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
+  drawing.pts.push([r((e.clientX - b.left) / b.width), r((e.clientY - b.top) / b.height)]);
+  drawingHelp(); drawAreas();
+});
+$('areaList').onclick = e => {
+  const b = e.target.closest('button');
+  if (b && confirm(`Delete this ${KINDS[b.dataset.kind].name.toLowerCase()}?`)) deleteArea(b.dataset.kind, +b.dataset.i);
+};
+$('ignoreBtn').onclick = () => {
+  if (confirm("Ignore whatever is in the yellow box from now on? (Only do this if it's not a person.)")) send({ type: 'ignore' });
+};
+
+// ---- Voice ------------------------------------------------------------------------
+// Lines can also play on this phone, once a button is tapped (phones only allow sound after a tap).
+const player = new Audio();
+player.playsInline = true;
+const vQueue = [];
+let vUnlocked = false, vPlaying = false, vSettings = null;
+
+function silentWav() {   // a tenth of a second of silence, to unlock sound
+  const n = 2205, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const s = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVEfmt '); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 22050, true); v.setUint32(28, 44100, true);
+  v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+$('vUnlock').onclick = async () => {
+  if (vUnlocked) { vUnlocked = false; vQueue.length = 0; $('vUnlock').textContent = 'Also play lines on this phone'; return; }
+  if (navigator.audioSession) navigator.audioSession.type = 'playback';   // play even with the silent switch on
+  player.src = silentWav();
+  try { await player.play(); } catch (e) { $('vStatus').textContent = 'Sound blocked: ' + e.message; return; }
+  vUnlocked = true;
+  $('vUnlock').textContent = 'Playing lines on this phone too (tap to stop)';
+  vPlayNext();
+};
+function vPlayNext() {
+  if (!vUnlocked || vPlaying || !vQueue.length) return;
+  vPlaying = true;
+  $('vNow').classList.add('playing');
+  player.src = `/voice/audio/${vQueue.shift()}`;
+  player.play().catch(() => { vPlaying = false; $('vNow').classList.remove('playing'); });
+}
+player.onended = () => { vPlaying = false; $('vNow').classList.remove('playing'); vPlayNext(); };
+
+function vMeta(e) {
+  const s = e.seconds, cost = e.cost ? ` · $${e.cost.toFixed(4)}` : '';
+  let t = `photo after ${s.photo}s, line ready ${s.ready}s later`;
+  if (s.waited) t += `, waited ${s.waited}s for a talk zone`;
+  return `${e.time} · ${e.source}${cost} · ${t}` + (e.played ? '' : ` · NOT PLAYED: ${e.skipped}`);
+}
+function vAddLine(e, play) {
+  if (e.played) {
+    $('vNow').textContent = e.text;
+    $('vNow').insertAdjacentHTML('beforeend', '<div class="meta"></div>');
+    $('vNow').lastChild.textContent = vMeta(e);
+  }
+  const li = document.createElement('li');
+  if (!e.played) li.className = 'skipped';
+  li.innerHTML = '<div></div><div class="meta"></div>';
+  li.children[0].textContent = e.text;
+  li.children[1].textContent = vMeta(e);
+  if (e.played) {
+    const b = document.createElement('button');
+    b.textContent = 'Play on this phone';
+    b.onclick = () => { player.src = `/voice/audio/${e.n}`; player.play(); };
+    li.append(b);
+  }
+  $('vLog').prepend(li);
+  while ($('vLog').children.length > 30) $('vLog').lastChild.remove();
+  if (play && e.played) { vQueue.push(e.n); vPlayNext(); }
+}
+function voiceMessage(m) {
+  if (m.type === 'voice_hello') {
+    const sel = document.querySelector('[data-v=character]');
+    sel.innerHTML = '';
+    for (const [value, label] of Object.entries(m.characters)) sel.add(new Option(label, value));
+    vShowSettings(m.settings);
+    vShowToday(m.today);
+    $('vLog').innerHTML = '';
+    m.history.forEach(e => vAddLine(e, false));
+    if (!m.history.length) $('vLog').innerHTML = '<p class="help">No lines yet today.</p>';
+    if (!m.hasKey) $('vStatus').textContent = 'No Anthropic key found: canned lines only.';
+    vShowSpeakers(m.speakers);
+  } else if (m.type === 'voice_line') {
+    if ($('vLog').querySelector('p')) $('vLog').innerHTML = '';
+    vAddLine(m, true);
+    vShowToday(m.today);
+    $('vStatus').textContent = 'Waiting for the next person.';
+  } else if (m.type === 'voice_speakers') {
+    vShowSpeakers(m.speakers);
+  } else if (m.type === 'voice_status') {
+    $('vStatus').textContent = m.text;
+  } else if (m.type === 'voice_settings') {
+    vShowSettings(m.settings);
+  } else if (m.type === 'voice_person') {
+    document.querySelectorAll('.cambox .feet').forEach(f => {
+      if (!m.feet) { f.style.display = 'none'; return; }
+      Object.assign(f.style, { display: 'block', left: m.feet[0] * 100 + '%', top: m.feet[1] * 100 + '%' });
+      f.className = 'feet' + (m.talk ? ' talk' : m.noPhoto ? ' nophoto' : '');
+    });
+  }
+}
+function vShowSpeakers(list) {
+  const el = $('vSpeaker');
+  if (!list || !list.length) { el.innerHTML = '<b class="bad">Yard speaker: not connected</b> (the Pi is off or can\'t reach this computer)'; return; }
+  el.innerHTML = list.map(s => s.connected
+    ? `<b class="ok">Yard speaker: ready</b> (${s.device || 'Bluetooth'})`
+    : `<b class="bad">Yard speaker: Bluetooth speaker off or out of range</b> (the Pi keeps trying)`).join('<br>');
+}
+function vShowToday(t) { if (t) $('vToday').textContent = `Today: ${t.count} Claude lines, $${t.cost.toFixed(3)}`; }
+function vShowSettings(s) {
+  vSettings = s;
+  areas.talk = s.talkZones; areas.nophoto = s.noPhotoZones;
+  drawAreas();
+  document.querySelectorAll('[data-v]').forEach(el => {
+    if (document.activeElement === el) return;
+    if (el.type === 'checkbox') el.checked = s[el.dataset.v]; else el.value = s[el.dataset.v];
+  });
+}
+document.querySelectorAll('[data-v]').forEach(el => el.onchange = () => {
+  const value = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : Number(el.value);
+  send({ type: 'voice_setting', key: el.dataset.v, value });
+});
+$('vSay').onclick = () => send({ type: 'voice_say' });
+$('vSpeakerTest').onclick = () => { send({ type: 'voice_speaker_test' }); toast('Test sound sent to the yard speaker', true); };
+// Plays a sample line in the current character's voice, on this phone.
+$('vPreview').onclick = async () => {
+  $('vPreview').textContent = 'Loading…';
+  $('vPreview').disabled = true;
+  if (navigator.audioSession) navigator.audioSession.type = 'playback';
+  player.src = '/voice/preview?t=' + Date.now();
+  try { await player.play(); } catch (e) { toast('Preview failed: ' + e.message, false); }
+  $('vPreview').textContent = '▶ Preview character';
+  $('vPreview').disabled = false;
+};
+document.querySelector('.react').onclick = e => {
+  const b = e.target.closest('button');
+  if (b) { send({ type: 'react', action: b.dataset.react }); toast(b.textContent + ' sent to the eye', true); }
+};
+
+// ---- Recordings ---------------------------------------------------------------------
+let rClips = [], rFilter = 'all';
+function recMessage(m) {
+  if (m.type === 'rec_hello') { rClips = m.clips; rShowSettings(m.settings); rShowUsage(m.usage); rDraw(); }
+  else if (m.type === 'rec_clip') { rClips.unshift(m.clip); rShowUsage(m.usage); rDraw(); }
+  else if (m.type === 'rec_deleted') { rClips = rClips.filter(c => c.file !== m.file); rShowUsage(m.usage); rDraw(); }
+  else if (m.type === 'rec_settings') { rShowSettings(m.settings); if (m.note) toast(m.note, true); }
+}
+function rShowUsage(u) {
+  $('rUsage').textContent = u.problem ? '⚠️ ' + u.problem : `${rClips.length} clips · ${u.gb} GB of ${u.maxGB} GB used`;
+}
+function rShowSettings(s) {
+  areas.record = s.zones;
+  drawAreas();
+  document.querySelectorAll('[data-r]').forEach(el => {
+    if (document.activeElement === el) return;
+    if (el.type === 'checkbox') el.checked = s[el.dataset.r]; else el.value = s[el.dataset.r];
+  });
+}
+document.querySelectorAll('[data-r]').forEach(el => el.onchange = () =>
+  send({ type: 'rec_setting', key: el.dataset.r, value: el.type === 'checkbox' ? el.checked : Number(el.value) }));
+document.querySelector('.rfilter').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  rFilter = b.dataset.f;
+  document.querySelectorAll('.rfilter button').forEach(x => x.classList.toggle('on', x === b));
+  rDraw();
+};
+function rDraw() {
+  const shown = rClips.filter(c => rFilter === 'all' || (rFilter === 'stopped' ? c.stopped : c.line));
+  const ul = $('rClips');
+  ul.innerHTML = shown.length ? '' : '<p class="help">No clips here yet.</p>';
+  for (const c of shown) {
+    const li = document.createElement('li');
+    li.innerHTML = `<img alt=""><div><div class="when"></div><div class="what"></div>
+      <div class="acts"><button>▶ Play</button><a download><button>Save</button></a><button>Delete</button></div></div>`;
+    li.querySelector('img').src = '/recordings/' + c.file.replace('.mp4', '.jpg');
+    li.querySelector('.when').textContent = c.time;
+    const what = li.querySelector('.what');
+    if (c.stopped) what.insertAdjacentHTML('beforeend', `<span class="stopped">Stopped to look (${c.stoodStill}s)</span> · `);
+    what.append(`${c.seconds}s` + (c.line ? ` · “${c.line}”` : ''));
+    const play = () => {
+      let v = li.querySelector('video');
+      if (v) { v.remove(); return; }
+      v = document.createElement('video');
+      v.src = '/recordings/' + c.file; v.controls = true; v.playsInline = true; v.autoplay = true;
+      li.append(v);
+    };
+    const [playBtn, , delBtn] = li.querySelectorAll('button');
+    playBtn.onclick = play;
+    li.querySelector('img').onclick = play;
+    li.querySelector('a').href = '/recordings/' + c.file;
+    delBtn.onclick = () => { if (confirm('Delete this clip?')) send({ type: 'rec_delete', file: c.file }); };
+    ul.append(li);
+  }
+}
+
+// ---- Aim ------------------------------------------------------------------------------
+let aiming = false, aim = { x: 0, y: 0 }, sendTimer = null;
+// Drag sensitivity: dragging across the whole circle moves the eye this many "eye widths".
+const SENSITIVITY = 1.0;
+
+function showAimStatus(m) {
+  $('saveBtn').disabled = !(aiming && m.person);
   $('spotsTitle').textContent = `Saved spots (${m.points.length})`;
   const html = m.points.map((q, i) =>
     `<li><span>${i + 1}. left-right ${q.x.toFixed(2)}, size ${q.size.toFixed(2)}</span>` +
@@ -246,7 +651,6 @@ function showStatus(m) {
   if ($('spots').innerHTML !== html) $('spots').innerHTML = html;
   if (!aiming && m.predicted) { aim.x = m.predicted[0]; aim.y = m.predicted[1]; drawDot(); }
 }
-
 function setAiming(on) {
   aiming = on;
   $('pad').classList.toggle('active', on);
@@ -257,7 +661,6 @@ function setAiming(on) {
   $('saveBtn').disabled = !(on && last && last.person);
   if (on) send({ type: 'aim', x: aim.x, y: aim.y }); else send({ type: 'release' });
 }
-
 function clampDisc(p) { const d = Math.hypot(p.x, p.y); if (d > 1) { p.x /= d; p.y /= d; } }
 function drawDot() {
   // the pad shows the eye: center = looking straight out, edge = as far as it can look
@@ -268,7 +671,6 @@ function sendAimSoon() {
   if (sendTimer) return;
   sendTimer = setTimeout(() => { sendTimer = null; send({ type: 'aim', x: aim.x, y: aim.y }); }, 50);
 }
-
 // Drag works like a laptop trackpad: it moves the dot relative to where it is,
 // so you can make small, precise adjustments.
 let drag = null;
@@ -290,230 +692,18 @@ $('pad').addEventListener('pointermove', e => {
 const endDrag = () => { drag = null; };
 $('pad').addEventListener('pointerup', endDrag);
 $('pad').addEventListener('pointercancel', endDrag);
-
 $('aimBtn').onclick = () => setAiming(!aiming);
 $('centerBtn').onclick = () => { aim = { x: 0, y: 0 }; drawDot(); if (aiming) send({ type: 'aim', x: 0, y: 0 }); };
 $('saveBtn').onclick = () => send({ type: 'save' });
-$('ignoreBtn').onclick = () => {
-  if (confirm("Ignore whatever is in the yellow box from now on? (Only do this if it's not a person.)")) send({ type: 'ignore' });
-};
-$('clearIgnoreBtn').onclick = () => { if (confirm('Stop ignoring all spots?')) send({ type: 'clear_ignore' }); };
-document.querySelector('.react').onclick = e => {
-  const b = e.target.closest('button');
-  if (b) { send({ type: 'react', action: b.dataset.react }); toast(b.textContent + ' sent', true); }
-};
 $('clearBtn').onclick = () => { if (confirm('Delete all saved spots and start over?')) send({ type: 'clear' }); };
 $('spots').onclick = e => { const i = e.target.dataset.i; if (i !== undefined) send({ type: 'delete', index: +i }); };
 
-let toastTimer;
-function toast(text, ok) {
-  $('toast').textContent = text;
-  $('toast').className = 'toast ' + (ok ? 'ok' : 'bad');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 4000);
-}
-
-// ---- Tabs ---------------------------------------------------------------------
-document.querySelector('.tabs').onclick = e => {
-  const b = e.target.closest('button');
-  if (!b) return;
-  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
-  // The Voice tab has its own camera view (for drawing zones); hide the top one there.
-  document.querySelector('.cam').style.display = b.dataset.tab === 'voice' ? 'none' : '';
-};
-
-// ---- Voice --------------------------------------------------------------------
-// Lines play on this phone once "Turn on sound" is tapped (phones only allow sound after a tap).
-const player = new Audio();
-player.playsInline = true;
-const vQueue = [];
-let vUnlocked = false, vPlaying = false, vSettings = null, drawing = null;
-
-function silentWav() {   // a tenth of a second of silence, to unlock sound
-  const n = 2205, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
-  const s = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
-  s(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); s(8, 'WAVEfmt '); v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 22050, true); v.setUint32(28, 44100, true);
-  v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, n * 2, true);
-  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-}
-$('vUnlock').onclick = async () => {
-  if (navigator.audioSession) navigator.audioSession.type = 'playback';   // play even with the silent switch on
-  player.src = silentWav();
-  try { await player.play(); } catch (e) { $('vStatus').textContent = 'Sound blocked: ' + e.message; return; }
-  vUnlocked = true;
-  $('vUnlock').textContent = 'Sound is on';
-  $('vUnlock').disabled = true;
-  vPlayNext();
-};
-function vPlayNext() {
-  if (!vUnlocked || vPlaying || !vQueue.length) return;
-  vPlaying = true;
-  $('vNow').classList.add('playing');
-  player.src = `/voice/audio/${vQueue.shift()}`;
-  player.play().catch(() => { vPlaying = false; $('vNow').classList.remove('playing'); });
-}
-player.onended = () => { vPlaying = false; $('vNow').classList.remove('playing'); vPlayNext(); };
-
-function vMeta(e) {
-  const s = e.seconds, cost = e.cost ? ` · $${e.cost.toFixed(4)}` : '';
-  let t = `photo after ${s.photo}s, line ready ${s.ready}s later`;
-  if (s.waited) t += `, waited ${s.waited}s for a talk zone`;
-  return `${e.time} · ${e.source}${cost} · ${t}` + (e.played ? '' : ` · NOT PLAYED: ${e.skipped}`);
-}
-function vAddLine(e, play) {
-  if (e.played) {
-    $('vNow').textContent = e.text;
-    $('vNow').insertAdjacentHTML('beforeend', '<div class="vmeta"></div>');
-    $('vNow').lastChild.textContent = vMeta(e);
-  }
-  const li = document.createElement('li');
-  if (!e.played) li.className = 'skipped';
-  li.innerHTML = '<div></div><div class="vmeta"></div>';
-  li.children[0].textContent = e.text;
-  li.children[1].textContent = vMeta(e);
-  if (e.played) {
-    const b = document.createElement('button');
-    b.textContent = 'Play again';
-    b.onclick = () => { vQueue.unshift(e.n); vPlayNext(); };
-    li.append(b);
-  }
-  $('vLog').prepend(li);
-  while ($('vLog').children.length > 30) $('vLog').lastChild.remove();
-  if (play && e.played) { vQueue.push(e.n); vPlayNext(); }
-}
-
-function voiceMessage(m) {
-  if (m.type === 'voice_hello') {
-    const fill = (key, options) => {   // options: {value: label}
-      const sel = document.querySelector(`[data-v=${key}]`);
-      sel.innerHTML = '';
-      for (const [value, label] of Object.entries(options)) sel.add(new Option(label, value));
-    };
-    fill('character', m.characters);
-    fill('model', Object.fromEntries(m.models.map(x => [x, x.replace('claude-', '')])));
-    vShowSettings(m.settings);
-    vShowToday(m.today);
-    $('vLog').innerHTML = '';
-    m.history.forEach(e => vAddLine(e, false));
-    if (!m.hasKey) $('vStatus').textContent = 'No Anthropic key found: canned lines only.';
-  } else if (m.type === 'voice_line') {
-    vAddLine(m, true);
-    vShowToday(m.today);
-    $('vStatus').textContent = 'Waiting for the next person.';
-  } else if (m.type === 'voice_status') {
-    $('vStatus').textContent = m.text;
-  } else if (m.type === 'voice_settings') {
-    vShowSettings(m.settings);
-  } else if (m.type === 'voice_person') {
-    const f = $('vFeet');
-    if (!m.feet) { f.style.display = 'none'; return; }
-    Object.assign(f.style, { display: 'block', left: m.feet[0] * 100 + '%', top: m.feet[1] * 100 + '%' });
-    f.className = 'feet' + (m.talk ? ' talk' : m.noPhoto ? ' nophoto' : '');
-  }
-}
-function vShowToday(t) { if (t) $('vToday').textContent = `Today: ${t.count} Claude lines, $${t.cost.toFixed(3)}`; }
-function vShowSettings(s) {
-  vSettings = s;
-  document.querySelectorAll('[data-v]').forEach(el => {
-    if (document.activeElement === el) return;
-    if (el.type === 'checkbox') el.checked = s[el.dataset.v]; else el.value = s[el.dataset.v];
-  });
-  vDrawZones();
-}
-document.querySelectorAll('[data-v]').forEach(el => el.onchange = () => {
-  const value = el.type === 'checkbox' ? el.checked : el.tagName === 'SELECT' ? el.value : Number(el.value);
-  send({ type: 'voice_setting', key: el.dataset.v, value });
-});
-$('vSay').onclick = () => send({ type: 'voice_say' });
-// Plays a sample line in the current character's voice (works even before "Turn on sound").
-$('vPreview').onclick = async () => {
-  $('vPreview').textContent = 'Loading…';
-  $('vPreview').disabled = true;
-  if (navigator.audioSession) navigator.audioSession.type = 'playback';
-  player.src = '/voice/preview?t=' + Date.now();
-  try { await player.play(); } catch (e) { $('vStatus').textContent = 'Preview failed: ' + e.message; }
-  $('vPreview').textContent = '▶ Preview character';
-  $('vPreview').disabled = false;
-};
-
-// ---- Zones: tap corners on the camera picture to draw a shape ----
-const ZONE = { talkZones: { name: 'talk zone', fill: 'rgba(255,138,61,.25)', line: '#ff8a3d' },
-               noPhotoZones: { name: 'no-photo zone', fill: 'rgba(85,153,255,.25)', line: '#59f' } };
-function vDrawZones() {
-  if (!vSettings) return;
-  let svg = '';
-  const poly = (pts, z, closed) => {
-    const p = pts.map(q => q.join(',')).join(' ');
-    return closed
-      ? `<polygon points="${p}" fill="${z.fill}" stroke="${z.line}" stroke-width="2" vector-effect="non-scaling-stroke"/>`
-      : `<polyline points="${p}" fill="none" stroke="${z.line}" stroke-width="2" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"/>`;
-  };
-  for (const key of ['noPhotoZones', 'talkZones']) for (const s of vSettings[key]) svg += poly(s, ZONE[key], true);
-  if (drawing) {
-    const z = ZONE[drawing.key];
-    if (drawing.pts.length > 1) svg += poly(drawing.pts, z, drawing.pts.length > 2);
-    for (const [x, y] of drawing.pts)
-      svg += `<ellipse cx="${x}" cy="${y}" rx=".012" ry=".021" fill="${z.line}"/>`;
-  }
-  $('vZones').innerHTML = svg;
-  const list = [];
-  for (const key of ['talkZones', 'noPhotoZones'])
-    vSettings[key].forEach((s, i) => list.push(
-      `<li><span>${key === 'talkZones' ? '<b class="zt">Talk zone</b>' : '<b class="zn">No-photo zone</b>'} ${i + 1}` +
-      ` (${s.length} corners)</span><button data-key="${key}" data-i="${i}">Delete</button></li>`));
-  $('vZoneList').innerHTML = list.join('');
-}
-function vStartDrawing(key) {
-  drawing = { key, pts: [] };
-  $('vDrawIdle').style.display = 'none';
-  $('vDrawing').style.display = 'block';
-  vDrawingHelp();
-  vDrawZones();
-}
-function vDrawingHelp() {
-  const n = drawing.pts.length;
-  $('vDrawHelp').textContent = `Drawing a ${ZONE[drawing.key].name}: tap each corner on the picture ` +
-    `(${n} so far${n < 3 ? ', at least 3' : ''}), then Done.`;
-  $('vDone').disabled = n < 3;
-}
-function vStopDrawing() {
-  drawing = null;
-  $('vDrawIdle').style.display = '';
-  $('vDrawing').style.display = 'none';
-  vDrawZones();
-}
-$('vDrawTalk').onclick = () => vStartDrawing('talkZones');
-$('vDrawNo').onclick = () => vStartDrawing('noPhotoZones');
-$('vUndo').onclick = () => { drawing.pts.pop(); vDrawingHelp(); vDrawZones(); };
-$('vCancel').onclick = vStopDrawing;
-$('vDone').onclick = () => {
-  send({ type: 'voice_setting', key: drawing.key, value: [...vSettings[drawing.key], drawing.pts] });
-  vStopDrawing();
-};
-$('vZoneBox').addEventListener('pointerdown', e => {
-  if (!drawing) return;
-  const b = $('vZoneBox').getBoundingClientRect();
-  const r = v => Math.round(Math.min(1, Math.max(0, v)) * 10000) / 10000;
-  drawing.pts.push([r((e.clientX - b.left) / b.width), r((e.clientY - b.top) / b.height)]);
-  vDrawingHelp();
-  vDrawZones();
-});
-$('vZoneList').onclick = e => {
-  const b = e.target.closest('button');
-  if (!b || !confirm('Delete this zone?')) return;
-  const shapes = vSettings[b.dataset.key].filter((_, i) => i !== +b.dataset.i);
-  send({ type: 'voice_setting', key: b.dataset.key, value: shapes });
-};
-
-// ---- Settings -------------------------------------------------------------------
-// The server sends the list of settings (schema) and the ones changed so far.
-// Anything not changed shows its default from config.js.
+// ---- Eye settings (built from the list the server sends) -------------------------------
+// The "Detection" group goes on the Areas tab (it decides what counts as a person);
+// everything else is under Settings → Eye. Anything not changed shows its default from config.js.
 const DEFAULTS = window.EYE_CONFIG || {};
 let schema = null, overrides = {}, dragging = null;
 const sendTimers = {};
-
 const decimals = step => (String(step).split('.')[1] || '').length;
 const valueOf = key => key in overrides ? overrides[key] : DEFAULTS[key];
 
@@ -522,21 +712,27 @@ function showSettings(m) {
   if (m.schema && !schema) { schema = m.schema; buildSettings(); }
   if (schema) for (const spec of schema) updateRow(spec);
 }
-
 function buildSettings() {
-  const box = $('settings');
-  box.innerHTML = '';
+  $('eyeSettings').innerHTML = '';
+  $('areaSettings').innerHTML = '';
   const groups = {};
   for (const spec of schema) {
+    const onAreas = spec.group === 'Detection';
     if (!groups[spec.group]) {
-      const d = document.createElement('details');
-      if (!Object.keys(groups).length) d.open = true;   // first group starts open
-      d.innerHTML = `<summary>${spec.group}</summary>`;
-      box.appendChild(d);
-      groups[spec.group] = d;
+      if (onAreas) {
+        groups[spec.group] = document.createElement('div');
+        groups[spec.group].style.cssText = 'background:var(--panel);border-radius:10px;margin-bottom:10px';
+        $('areaSettings').appendChild(groups[spec.group]);
+      } else {
+        const d = document.createElement('details');
+        d.innerHTML = `<summary>${spec.group}</summary>`;
+        $('eyeSettings').appendChild(d);
+        groups[spec.group] = d;
+      }
     }
     const row = document.createElement('div');
     row.className = 'set';
+    if (onAreas) row.style.borderTop = '0';
     row.dataset.key = spec.key;
     if (spec.kind === 'toggle') {
       row.innerHTML = `<div class="set-top"><span class="label">${spec.label}</span>
@@ -561,7 +757,6 @@ function buildSettings() {
     groups[spec.group].appendChild(row);
   }
 }
-
 function updateRow(spec) {
   const row = document.querySelector(`.set[data-key="${spec.key}"]`);
   if (!row) return;
@@ -569,22 +764,17 @@ function updateRow(spec) {
   const v = valueOf(spec.key);
   if (spec.kind === 'toggle') { row.querySelector('input').checked = !!v; return; }
   if (dragging === spec.key) return;   // don't fight the finger
-  row.querySelector('input').value = v;
+  row.querySelector('input[type=range]').value = v;
   showVal(spec, row, v);
 }
-
-function showVal(spec, row, v) {
-  row.querySelector('.val').textContent = Number(v).toFixed(decimals(spec.step));
-}
-
+function showVal(spec, row, v) { row.querySelector('.val').textContent = Number(v).toFixed(decimals(spec.step)); }
 function nudge(spec, row, dir) {
-  const slider = row.querySelector('input');
+  const slider = row.querySelector('input[type=range]');
   const v = Math.min(spec.max, Math.max(spec.min, +slider.value + dir * spec.step));
   slider.value = v;
   showVal(spec, row, v);
   sendNow(spec.key, +v.toFixed(decimals(spec.step)));
 }
-
 // Send while dragging, but no more than ~10 times a second.
 function sendSoon(key, value) {
   if (sendTimers[key]) { sendTimers[key].value = value; return; }
@@ -594,7 +784,6 @@ function sendNow(key, value) {
   if (sendTimers[key]) { clearTimeout(sendTimers[key].t); delete sendTimers[key]; }
   send({ type: 'setting', key, value });
 }
-
 // Hold a −/+ button to keep nudging.
 function holdToRepeat(btn, fn) {
   let delay, repeat;
@@ -607,7 +796,12 @@ function holdToRepeat(btn, fn) {
   ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
 }
 
+// ---- Start ----------------------------------------------------------------------------
 drawDot();
+drawAreas();
+let startTab = 'live';
+try { startTab = localStorage.getItem('eyeTab') || 'live'; } catch (e) {}
+openTab(document.getElementById('tab-' + startTab) ? startTab : 'live');
 connect();
 </script>
 </body>

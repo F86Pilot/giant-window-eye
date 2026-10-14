@@ -34,7 +34,7 @@
   <button data-react="doubletake">👀 Double-take</button>
   <button data-react="blink">Blink</button>
 </div>
-<script src="config.js"></script>
+<script src="config.js?v=3"></script>
 <script>
 // ---------------------------------------------------------------------------
 // Settings (defaults; config.js overrides them)
@@ -45,7 +45,8 @@ const C = Object.assign({
   eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
   maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
   moods: true, drowsySec: 6,
-  eyeRollChance: 0.04, doubleTakeChance: 0.4,
+  eyeRollChance: 0.04, doubleTakeChance: 0,
+  talkAnim: true, talkDelay: 0.35, talkPulse: 0.7, talkJiggle: 0.5,
   wsUrl: "", maxPixelRatio: 2,
 }, window.EYE_CONFIG || {});
 C.showGuide = false;
@@ -295,6 +296,7 @@ function connect() {
     let msg;
     try { msg = JSON.parse(e.data); } catch (err) { return; }
     if (msg.type === 'react') { react(msg.action); return; }   // test button on the phone page
+    if (msg.type === 'talk') { startTalk(msg); return; }       // the voice is saying a line
     if (msg.type === 'settings') { applySettings(msg.values); return; }
     lastMsg = msg;
     // The server or page files were updated: reload to get the new version.
@@ -505,13 +507,16 @@ function draw() {
   ctx.drawImage(scleraTex, cx - R, cy - R);
 
   // Iris + pupil, squashed as they turn toward the edge so it looks like a ball
-  const ox = look.x * C.maxTravel * R, oy = look.y * C.maxTravel * R;
+  const jiggle = talking('laugh') ? Math.sin(performance.now() / 45) * R * 0.03 * C.talkJiggle * (0.4 + talkLevel) : 0;
+  const ox = look.x * C.maxTravel * R, oy = look.y * C.maxTravel * R + jiggle;
   const d = Math.min(Math.hypot(ox, oy) / R, 0.95);
   const squash = Math.cos(Math.asin(d));
   const ang = Math.atan2(oy, ox);
   ctx.save();
   ctx.translate(cx + ox, cy + oy);
   ctx.rotate(ang); ctx.scale(squash, 1); ctx.rotate(-ang);
+  const swell = 1 + 0.06 * talkLevel * C.talkPulse;   // the iris swells a little on each syllable
+  ctx.scale(swell, swell);
   const hue = currentHue(performance.now());
   const h0 = Math.floor(hue / HUE_STEP) * HUE_STEP, fade = (hue - h0) / HUE_STEP;
   const ia = irisForHue(h0), ib = irisForHue(h0 + HUE_STEP);
@@ -521,7 +526,7 @@ function draw() {
     ctx.drawImage(ib, -ib.width / 2, -ib.height / 2);
     ctx.globalAlpha = 1;
   }
-  const pr = irisR * C.pupilSize * pupil;
+  const pr = irisR * C.pupilSize * pupil * (1 + 0.45 * talkLevel * C.talkPulse);
   ctx.drawImage(pupilTex, -pr * 1.08, -pr * 1.08, pr * 2.16, pr * 2.16);
   ctx.restore();
 
@@ -538,7 +543,8 @@ function draw() {
 
   // Eyelids: an upper lid that comes down from the top and a lower lid that
   // comes up from the bottom. 0 = lid fully open, 1 = lid at the line where they meet.
-  const upper = Math.max(lids.upper, blink), lower = Math.max(lids.lower, blink);
+  const narrow = talking('whisper') ? 0.32 : 0;   // narrowed, conspiratorial lids while whispering
+  const upper = Math.max(lids.upper, blink, narrow), lower = Math.max(lids.lower, blink, narrow * 0.6);
   // Lower lid first, so when the eye is shut the upper lid's edge is the single
   // curved "closed eye" line. Lid lines stay inside the eyeball.
   if (upper > 0.001 || lower > 0.001) {
@@ -613,6 +619,33 @@ function updateHud(now) {
     `      S=sleep  W=startle  R=eye roll  T=double-take`;
 }
 
+// ---------------------------------------------------------------------------
+// Talking: the voice sends how loud its line is, 25 times a second, when the line starts
+// playing. The pupil and iris pulse with it. Cues in the line add a reaction:
+// whispers = narrowed lids, laughs = a jiggle, sarcastic/deadpan = an eye roll afterwards.
+// ---------------------------------------------------------------------------
+let talk = null, talkLevel = 0;
+function startTalk(msg) {
+  if (!C.talkAnim || !msg.env || !msg.env.length) return;
+  talk = { start: performance.now() + C.talkDelay * 1000, env: msg.env, step: msg.step * 1000, cues: msg.cues || [] };
+}
+function updateTalk(now, dt) {
+  let goal = 0;
+  if (talk) {
+    const i = (now - talk.start) / talk.step;
+    if (i >= talk.env.length) {
+      if (talk.cues.includes('roll') && C.moods) startEyeRoll(now);
+      talk = null;
+    } else if (i >= 0) {
+      const k = Math.floor(i), a = talk.env[k], b = talk.env[Math.min(talk.env.length - 1, k + 1)];
+      goal = a + (b - a) * (i - k);
+    }
+  }
+  // Quick to open on each syllable, a little slower to settle, so it reads as speech.
+  talkLevel += (goal - talkLevel) * (1 - Math.exp(-dt * (goal > talkLevel ? 30 : 12)));
+}
+const talking = cue => talk && talk.cues.includes(cue) && performance.now() >= talk.start;
+
 // Trigger a reaction on demand (test buttons, phone page, or keyboard).
 function react(action) {
   const now = performance.now();
@@ -645,6 +678,7 @@ function frame(now) {
   const dt = Math.min((now - prev) / 1000, 0.1);
   prev = now;
   updateBlink(now);
+  updateTalk(now, dt);
   tracking = updateLook(now, dt);
   draw();
   updateHud(now);

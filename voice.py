@@ -61,7 +61,7 @@ CHARACTERS = {
         "preview": "[raspy old witch voice] Cutting across my lawn, dearie? [cackles] My broom does that too!",
     },
 }
-SETTLE = 0.3              # seconds after someone appears before taking their photo (lets the box settle)
+SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
 
 DEFAULTS = {
     "enabled": True,
@@ -73,15 +73,21 @@ DEFAULTS = {
     "talkZones": [],            # shapes (lists of [x, y], 0-1 in the camera picture): play when feet are inside
     "noPhotoZones": [],         # shapes: don't take the photo while feet are inside
     "zoneWait": 20,             # seconds to wait for a photo, and then for them to reach a talk zone
+    "lingerSeconds": 20,        # someone still here this long after their line gets one more (once). 0 = off
+    "mustMove": True,           # only talk to "people" whose feet moved (a quarter of their height): skips static objects
 }
 MODELS = {
     # Thinking can't be turned off on Opus 5.5, so keep effort low. If a line is ever
     # refused, Anthropic's server retries it on a backup model ("fallbacks").
     "claude-opus-5-5": dict(output_config={"effort": "low"},
                             betas=["server-side-fallback-2026-07-01"], fallbacks="default"),
+    # Sonnet 5.5: about 3.5 s faster than Opus per line (measured), just as funny in testing.
+    "claude-sonnet-5-5": dict(output_config={"effort": "low"},
+                              betas=["server-side-fallback-2026-07-01"], fallbacks="default"),
     "claude-haiku-5-5": dict(output_config={"effort": "low"}, thinking={"type": "disabled"}),
 }
-PRICE = {"claude-opus-5-5": (4.00, 20.00), "claude-haiku-5-5": (0.10, 0.50)}   # $ per million tokens in/out
+PRICE = {"claude-opus-5-5": (4.00, 20.00), "claude-sonnet-5-5": (2.00, 10.00),
+         "claude-haiku-5-5": (0.10, 0.50)}   # $ per million tokens in/out
 SKIP = "SKIP"   # what Claude answers when there's nobody to talk to
 
 PROMPT = """You are the voice of a giant glowing eyeball displayed in the upstairs window of a house.
@@ -114,6 +120,37 @@ CANNED = [
     "I'm not staring. Okay, I'm staring.", "Another fine specimen.",
     "Have a good one. I'll be watching.", "Hello there, passerby.", "Eyes front. Well, eye.",
 ]
+
+
+TALK_STEP = 0.04   # seconds per loudness step sent to the eye (25 a second)
+
+
+def loudness(audio):
+    """How loud the line is every TALK_STEP seconds, 0-1, so the eye can pulse in time with the words."""
+    import subprocess
+    import numpy as np
+    r = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"],
+                       input=audio, capture_output=True, timeout=15)
+    pcm = np.frombuffer(r.stdout, np.int16).astype(np.float32)
+    n = int(8000 * TALK_STEP)
+    if len(pcm) < n:
+        return []
+    rms = np.sqrt((pcm[: len(pcm) // n * n].reshape(-1, n) ** 2).mean(axis=1))
+    top = np.percentile(rms, 95) or 1.0
+    return [round(float(min(1.0, v / top)), 2) for v in rms]
+
+
+def cues_in(text):
+    """Delivery cues in the line that the eye acts out."""
+    t = text.lower()
+    found = []
+    if "[whisper" in t:
+        found.append("whisper")
+    if "[laugh" in t or "[cackle" in t or "[giggle" in t:
+        found.append("laugh")
+    if "[sarcastic" in t or "[deadpan" in t:
+        found.append("roll")
+    return found
 
 
 def feet(box):
@@ -188,7 +225,7 @@ class Store:
     def set(self, key, value):
         if key not in DEFAULTS:
             return False
-        if key == "enabled":
+        if key in ("enabled", "mustMove"):
             value = bool(value)
         elif key == "model":
             if value not in MODELS:
@@ -201,7 +238,7 @@ class Store:
             if value is None:
                 return False
         else:
-            limits = {"cooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
+            limits = {"lingerSeconds": (0, 600), "cooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
                       "zoneWait": (3, 120)}
             lo, hi = limits[key]
             try:
@@ -232,6 +269,13 @@ class Voice:
         self.audio = {}          # line number -> (audio bytes, content type), recent ones only
         self.history = []        # recent lines, shown on the page
         self.busy = False
+        self.spoken_to = {}      # person ID -> (when their line played, the line), for "still here?"
+        self.followed_up = set() # person IDs that already got their one "still here" line
+        self.on_play = None      # called with (audio, content type, text) when a line plays
+        self.speakers = {}       # yard speakers (speaker/player.py on a Pi): websocket -> its last status
+        self.send_eye = None     # async: sends a message to the eye pages (set by the tracker)
+        self.talks = {}          # line number (or "preview") -> {"env", "cues"}, for the eye's talking
+        self.talked = set()      # lines the eye already acted out
         self.last_spoken = 0.0
         self.line_number = 0
 
@@ -330,8 +374,8 @@ class Voice:
         plain = " ".join(re.sub(r"\[[^\]]*\]", " ", text).split())   # Piper would read the cues out loud
         return self.piper_wav(plain, PIPER_VOICE), "audio/wav", 0.0, "Piper (backup)"
 
-    async def make_line(self, image):
-        """Returns (line, source, cost)."""
+    async def make_line(self, image, note=""):
+        """Returns (line, source, cost). note: extra context for Claude (e.g. "they're still here")."""
         s = self.store
         s.roll_day()
         model = s.settings["model"]
@@ -342,7 +386,7 @@ class Voice:
         recent = [h["text"] for h in self.history[-8:] if h.get("played")]
         try:
             line, cost = await asyncio.to_thread(self.write, model, image,
-                                                 time_of_day(datetime.datetime.now()), recent,
+                                                 time_of_day(datetime.datetime.now()) + note, recent,
                                                  self.eleven_key is not None)
         except Exception as e:
             print(f"Voice: {e}")
@@ -361,18 +405,22 @@ class Voice:
         p = self.read_person()
         return p if p["present"] and p["id"] == pid and p["box"] else None
 
-    async def comment(self, pid, manual=False):
-        """Photo -> line -> wait for the talk zone -> play. One at a time."""
+    async def comment(self, pid, manual=False, followup=None):
+        """Photo -> line -> wait for the talk zone -> play. One at a time.
+        followup = (seconds, earlier line): they're still here after their line, so call that out."""
         if self.busy:
             return
         self.busy = True
         try:
             s = self.store.settings
             t0 = time.time()
-            # 1. Take the photo once they're out of the no-photo zones.
-            if not manual:
+            # 1. Take the photo once they're out of the no-photo zones and (if mustMove) have moved,
+            #    so a mailbox or bush mistaken for a person never gets a line.
+            now_or_never = manual or followup is not None   # photo and play right away
+            if not now_or_never:
                 await asyncio.sleep(SETTLE)
             reached = {"talk": False}
+            first = None
             while True:
                 p = self.same_person(pid)
                 if p is None:
@@ -381,10 +429,14 @@ class Voice:
                     return
                 if in_any(p["box"], s["talkZones"]):
                     reached["talk"] = True
-                if manual or not in_any(p["box"], s["noPhotoZones"]):
+                fx, fy = feet(p["box"])
+                first = first or (fx, fy)
+                moved = ((fx - first[0]) ** 2 + (fy - first[1]) ** 2) ** 0.5 >= 0.25 * (p["box"][3] - p["box"][1])
+                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or not s["mustMove"])):
                     break
                 if time.time() - t0 > s["zoneWait"]:
-                    await self.status(f"#{pid} stayed in a no-photo zone, no line")
+                    why = "stayed in a no-photo zone" if in_any(p["box"], s["noPhotoZones"]) else "never moved"
+                    await self.status(f"#{pid} {why}, no line")
                     return
                 await asyncio.sleep(0.1)
             image = self.crop(p["box"])
@@ -403,7 +455,13 @@ class Voice:
                     await asyncio.sleep(0.1)
             watcher = asyncio.create_task(watch())
             try:
-                line, source, cost = await self.make_line(image)
+                note = ""
+                if followup:
+                    note = (f" This person is STILL standing here, {followup[0]} seconds after you said to them:"
+                            f" {json.dumps(followup[1])}. Call out that they're still here; don't repeat that line.")
+                line, source, cost = await self.make_line(image, note)
+                if followup:
+                    source += " (still here)"
                 sound = None
                 if line.strip().upper().rstrip(".") != SKIP:
                     sound = await asyncio.to_thread(self.speak, line)   # (audio, type, cost, voice)
@@ -424,7 +482,7 @@ class Voice:
             if sound is None:
                 entry["skipped"] = "nobody there"
             else:
-                go = manual or not s["talkZones"] or reached["talk"]
+                go = now_or_never or not s["talkZones"] or reached["talk"]
                 if not go:
                     await self.status(f"Line ready, waiting for #{pid} to reach a talk zone...")
                     while time.time() - t_ready < s["zoneWait"]:
@@ -440,6 +498,17 @@ class Voice:
                     entry["played"] = True
                     entry["seconds"]["waited"] = round(time.time() - t_ready, 1)
                     self.last_spoken = time.time()
+                    if followup is None:
+                        self.spoken_to[pid] = (time.time(), line)
+                    if self.on_play:
+                        self.on_play(sound[0], sound[1], line)   # e.g. the recorder adds it to the clip
+                    self.talks[self.line_number] = {"env": await asyncio.to_thread(loudness, sound[0]),
+                                                    "cues": cues_in(line)}
+                    for n in [n for n in self.talks if isinstance(n, int) and n < self.line_number - 30]:
+                        del self.talks[n]
+                    await self.send_speakers({"type": "play", "n": self.line_number})
+                    if not any(sp.get("connected") for sp in self.speakers.values()):
+                        await self.eye_talk(self.line_number)   # no yard speaker: in time with the phone
                 else:
                     entry["skipped"] = "never reached a talk zone"
             entry["seconds"]["total"] = round(time.time() - t0, 1)
@@ -454,11 +523,12 @@ class Voice:
         finally:
             self.busy = False
 
-    def should_talk(self):
+    def should_talk(self, ignore_cooldown=False):
         s = self.store.settings
         a, b, h = s["quietFrom"], s["quietTo"], datetime.datetime.now().hour
         quiet = a != b and ((a < b and a <= h < b) or (a > b and (h >= a or h < b)))
-        return s["enabled"] and not self.busy and time.time() - self.last_spoken >= s["cooldown"] and not quiet
+        cooled = ignore_cooldown or time.time() - self.last_spoken >= s["cooldown"]
+        return s["enabled"] and not self.busy and cooled and not quiet
 
     async def run(self):
         """Watch who the tracker follows; someone new = someone to talk to."""
@@ -474,6 +544,15 @@ class Voice:
                     last_id = pid
                     if self.should_talk():
                         asyncio.create_task(self.comment(pid))
+                linger = self.store.settings["lingerSeconds"]
+                spoke = self.spoken_to.get(pid)
+                if (linger and spoke and pid not in self.followed_up and time.time() - spoke[0] >= linger
+                        and self.should_talk(ignore_cooldown=True)):
+                    self.followed_up.add(pid)   # only ever once per person
+                    asyncio.create_task(self.comment(pid, followup=(round(time.time() - spoke[0]), spoke[1])))
+                if len(self.spoken_to) > 200:   # forget people long gone
+                    for old in sorted(self.spoken_to, key=lambda k: self.spoken_to[k][0])[:100]:
+                        self.spoken_to.pop(old, None)
                 if time.time() - last_sent > 0.25:   # let pages show where the person is standing
                     last_sent = time.time()
                     box = p["box"] if p["present"] else None
@@ -491,12 +570,65 @@ class Voice:
         return {"type": "voice_hello", "settings": self.store.settings, "today": self.store.today,
                 "history": self.history[-20:], "models": list(MODELS),
                 "characters": {k: c["name"] for k, c in CHARACTERS.items()},
-                "hasKey": self.client is not None, "hasEleven": self.eleven_key is not None}
+                "hasKey": self.client is not None, "hasEleven": self.eleven_key is not None,
+                "speakers": self.speaker_list()}
+
+    async def eye_talk(self, n):
+        """Tell the eye pages to act out line n, starting now (they add their own sync delay)."""
+        talk = self.talks.get(n)
+        if not talk or not self.send_eye or (n, round(time.time())) in self.talked:
+            return
+        self.talked = {k for k in self.talked if time.time() - k[1] < 30} | {(n, round(time.time()))}
+        await self.send_eye({"type": "talk", "env": talk["env"], "step": TALK_STEP, "cues": talk["cues"]})
+
+    # ---- Yard speakers ----
+    def speaker_list(self):
+        return list(self.speakers.values())
+
+    async def send_speakers(self, msg):
+        text = json.dumps(msg)
+        for ws in list(self.speakers):
+            try:
+                await ws.send_str(text)
+            except Exception:
+                self.speakers.pop(ws, None)
+
+    async def speaker_handler(self, request):
+        """A yard speaker (speaker/player.py) connects here: it's told when to play each line
+        and reports whether its Bluetooth speaker is connected."""
+        from aiohttp import web
+        ws = web.WebSocketResponse(heartbeat=10)
+        await ws.prepare(request)
+        self.speakers[ws] = {"name": request.query.get("name", "speaker"), "connected": False}
+        print(f"Voice: yard speaker {self.speakers[ws]['name']} connected")
+        try:
+            async for m in ws:
+                try:
+                    msg = json.loads(m.data)
+                except (TypeError, ValueError):
+                    continue
+                if msg.get("type") == "status":
+                    self.speakers[ws] = {"name": str(msg.get("name", "speaker"))[:40],
+                                         "connected": bool(msg.get("connected")),
+                                         "device": str(msg.get("device", ""))[:40]}
+                    await self.send({"type": "voice_speakers", "speakers": self.speaker_list()})
+                elif msg.get("type") == "started":
+                    n = msg.get("n")
+                    await self.eye_talk(n if n == "preview" else int(n))
+                elif msg.get("type") == "played":
+                    print(f"Voice: yard speaker played line {msg.get('n')}")
+        finally:
+            gone = self.speakers.pop(ws, {})
+            print(f"Voice: yard speaker {gone.get('name', '')} disconnected")
+            await self.send({"type": "voice_speakers", "speakers": self.speaker_list()})
+        return ws
 
     async def handle(self, msg):
         kind = msg.get("type")
         if kind == "voice_setting" and self.store.set(msg.get("key"), msg.get("value")):
             await self.send({"type": "voice_settings", "settings": self.store.settings})
+        elif kind == "voice_speaker_test":
+            await self.send_speakers({"type": "test"})
         elif kind == "voice_say":
             p = self.read_person()
             if p["present"]:
@@ -517,7 +649,9 @@ class Voice:
                 self.store.save()
         audio, kind = self.preview_cache[key]
         styled = self.add_effect(audio)
-        return (styled, "audio/mpeg") if styled else (audio, kind)
+        audio, kind = (styled, "audio/mpeg") if styled else (audio, kind)
+        self.talks["preview"] = {"env": loudness(audio), "cues": cues_in(self.character()["preview"])}
+        return audio, kind
 
     async def preview_handler(self, request):
         from aiohttp import web

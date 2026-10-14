@@ -1,0 +1,27 @@
+#!/bin/bash
+# Set up the Giant Eye yard speaker on a Raspberry Pi (Raspberry Pi OS Lite).
+# Copy this folder to the Pi as ~/eye-speaker, pair the Bluetooth speaker (see README), then:
+#   ./install.sh http://<tracker-computer>:8085 <speaker Bluetooth address>
+# e.g. ./install.sh http://my-mac.local:8085 AA:BB:CC:11:22:33
+set -e
+SERVER=${1:?usage: ./install.sh http://<tracker-computer>:8085 <speaker address>}
+MAC=${2:?usage: ./install.sh http://<tracker-computer>:8085 <speaker address>}
+cd "$(dirname "$0")"
+
+sudo rfkill unblock bluetooth || true
+sudo apt-get install -y -qq bluez-alsa-utils mpg123 alsa-utils python3-aiohttp
+bluetoothctl trust "$MAC" >/dev/null
+
+# Medium Bluetooth audio quality: the Pi Zero's Wi-Fi and Bluetooth share one radio, and the
+# default (high) crackles; medium sounded best in testing.
+sudo mkdir -p /etc/systemd/system/bluealsa.service.d
+printf "[Service]\nExecStart=\nExecStart=/usr/bin/bluealsa -S -p a2dp-source -p a2dp-sink --sbc-quality=medium\n" \
+  | sudo tee /etc/systemd/system/bluealsa.service.d/quality.conf >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl restart bluealsa
+
+sed -e "s|__EYE_SERVER__|$SERVER|" -e "s|__SPEAKER_MAC__|$MAC|" eye-speaker.service \
+  | sudo tee /etc/systemd/system/eye-speaker.service >/dev/null
+sudo systemctl daemon-reload
+sudo systemctl enable --now eye-speaker
+echo "Yard speaker installed. Log: journalctl -u eye-speaker -f"

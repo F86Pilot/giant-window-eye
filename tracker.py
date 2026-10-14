@@ -68,8 +68,10 @@ class LatestFrame:
     """Reads the camera in the background and keeps only the newest frame,
     so detection never falls behind a live stream."""
 
-    def __init__(self, source):
+    def __init__(self, source, extra_output=None):
         self.source = source
+        self.extra_output = extra_output   # function -> extra ffmpeg output args (recordings), or None
+        self.proc = None
         self.frame = None
         self.lock = threading.Lock()
         threading.Thread(target=self._run, daemon=True).start()
@@ -97,10 +99,13 @@ class LatestFrame:
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
                "-rtsp_transport", "tcp", "-timeout", "5000000",
                "-fflags", "nobuffer", "-flags", "low_delay",
-               "-i", self.source, "-an", "-vf", f"scale={w}:{h}",
+               "-i", self.source, "-map", "0:v", "-an", "-vf", f"scale={w}:{h}",
                "-pix_fmt", "bgr24", "-f", "rawvideo", "-"]
-        print(f"Connecting to camera {hide_password(self.source)} ...")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        extra = self.extra_output() if self.extra_output else None
+        if extra:
+            cmd += extra   # also save the camera's own video for recordings (see recorder.py)
+        print(f"Connecting to camera {hide_password(self.source)} ..." + (" (recording)" if extra else ""))
+        proc = self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         threading.Thread(target=self._log_errors, args=(proc.stderr,), daemon=True).start()
         size = w * h * 3
         first = True
@@ -140,15 +145,24 @@ class LatestFrame:
             self._set(frame)
         cap.release()
 
+    def reconnect(self):
+        """Drop the camera connection; it reconnects by itself (e.g. after recording is switched on/off)."""
+        if self.proc:
+            self.proc.kill()
+
     def get(self):
         with self.lock:
             frame, self.frame = self.frame, None
         return frame
 
 
+camera_reader = None
+
+
 def detect_loop():
+    global camera_reader
     model = YOLO("yolo11n.pt")   # downloads a small (~5 MB) model the first time
-    camera = LatestFrame(SOURCE)
+    camera = camera_reader = LatestFrame(SOURCE, recorder.ffmpeg_output if recorder else None)
     # Keep going even if one frame causes an error, so tracking never silently stops.
     while True:
         try:
@@ -232,7 +246,11 @@ def _detect_loop(model, camera):
         # Debug picture: everyone in green, the followed person in yellow, aim point as a red dot,
         # ignored spots as gray outlines.
         for z in ignore_zones.zones:
-            cv2.rectangle(frame, (int(z[0] * w), int(z[1] * h)), (int(z[2] * w), int(z[3] * h)), (128, 128, 128), 2)
+            if isinstance(z[0], (int, float)):
+                cv2.rectangle(frame, (int(z[0] * w), int(z[1] * h)), (int(z[2] * w), int(z[3] * h)), (128, 128, 128), 2)
+            else:
+                cv2.polylines(frame, [np.array([[int(px * w), int(py * h)] for px, py in z], np.int32)], True,
+                              (128, 128, 128), 2)
         for b in ignored:
             cv2.rectangle(frame, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (128, 128, 128), 2)
         for pid, b in people.items():
@@ -282,6 +300,8 @@ async def cal_ws_handler(request):
     await ws.send_str(json.dumps({"type": "settings", "schema": SCHEMA, "values": settings.values}))
     if voice:
         await ws.send_str(json.dumps(voice.hello()))
+    if recorder:
+        await ws.send_str(json.dumps(await asyncio.to_thread(recorder.hello)))
     try:
         async for m in ws:
             try:
@@ -292,6 +312,9 @@ async def cal_ws_handler(request):
             if isinstance(kind, str) and kind.startswith("voice_"):
                 if voice:
                     await voice.handle(msg)
+            elif isinstance(kind, str) and kind.startswith("rec_"):
+                if recorder:
+                    await recorder.handle(msg)
             elif kind == "aim":
                 manual.update(on=True, x=float(msg["x"]), y=float(msg["y"]))
             elif kind == "release":
@@ -334,6 +357,12 @@ async def cal_ws_handler(request):
                     await send_all(clients, json.dumps({"type": "react", "action": msg["action"]}))
             elif kind == "clear_ignore":
                 ignore_zones.clear()
+            elif kind == "ignore_shape":
+                ok = ignore_zones.add_shape(msg.get("corners") or [])
+                await ws.send_str(json.dumps({"type": "saved", "ok": ok,
+                                              "msg": "Ignoring that area from now on" if ok else "That shape didn't work"}))
+            elif kind == "ignore_delete":
+                ignore_zones.delete(int(msg.get("index", -1)))
             elif kind == "clear":
                 calibration.clear()
     finally:
@@ -397,7 +426,8 @@ async def broadcast():
             await send_all(cal_clients, json.dumps({
                 "type": "status", "person": rounded(s) if s["present"] else None,
                 "predicted": predicted, "manual": manual["on"],
-                "points": calibration.points, "ignored": len(ignore_zones.zones)}))
+                "points": calibration.points, "ignored": len(ignore_zones.zones),
+                "ignoreZones": ignore_zones.zones}))
 
 
 async def debug_page(request):
@@ -435,6 +465,8 @@ async def start_background(app):
     app["broadcast"] = asyncio.create_task(broadcast())
     if voice:
         app["voice"] = asyncio.create_task(voice.run())
+    if recorder:
+        app["recorder"] = asyncio.create_task(recorder.run())
 
 
 # ---- Voice (voice.py): funny lines to passersby, played on the phone page -------
@@ -453,9 +485,35 @@ def start_voice():
 
         voice = Voice(DATA_DIR, read_person, lambda: clean_frame,
                       lambda msg: send_all(cal_clients, json.dumps(msg)))
+        voice.send_eye = lambda msg: send_all(clients, json.dumps(msg))   # the eye acts out each line
     except Exception:
         traceback.print_exc()
         print("Voice couldn't start; the eye runs without it")
+
+
+# ---- Recordings (recorder.py): a video clip of each visit, on an external drive -------
+recorder = None
+
+
+def start_recorder():
+    """Optional, like the voice: if it can't start, the eye carries on without it."""
+    global recorder
+    if not (isinstance(SOURCE, str) and "://" in SOURCE):
+        return   # only for network cameras (it saves the camera's own video stream)
+    try:
+        from recorder import Recorder
+
+        def read_person():
+            with lock:
+                return {"present": state["present"], "id": state["id"], "box": state["box"]}
+
+        recorder = Recorder(DATA_DIR, read_person, lambda msg: send_all(cal_clients, json.dumps(msg)))
+        recorder.on_toggle = lambda: camera_reader and camera_reader.reconnect()
+        if voice:
+            voice.on_play = recorder.line_played
+    except Exception:
+        traceback.print_exc()
+        print("Recordings couldn't start; the eye runs without them")
 
 
 def main():
@@ -467,6 +525,7 @@ def main():
     ignore_zones = IgnoreZones(os.path.join(DATA_DIR, "ignore_zones.json"))
     settings = Settings(os.path.join(DATA_DIR, "settings.json"))
     start_voice()
+    start_recorder()
     threading.Thread(target=detect_loop, daemon=True).start()
     app = web.Application()
     app.on_startup.append(start_background)
@@ -479,6 +538,9 @@ def main():
     if voice:
         app.router.add_get("/voice/audio/{n}", voice.audio_handler)
         app.router.add_get("/voice/preview", voice.preview_handler)
+        app.router.add_get("/voice/speaker", voice.speaker_handler)
+    if recorder:
+        app.router.add_get("/recordings/{day}/{name}", recorder.file_handler)
     app.router.add_static("/", "web")
     print(f"Web server started on port {PORT} (detecting on {DEVICE}, {DETECT_SIZE}px)")
     web.run_app(app, port=PORT, print=None)
@@ -487,7 +549,7 @@ def main():
 def restart_when_code_changes():
     """When running as a background service, quit if a program file is updated;
     the service starts it again right away with the new code (no password needed)."""
-    files = [os.path.join(HERE, f) for f in ("tracker.py", "calibration.py", "settings.py", "voice.py")]
+    files = [os.path.join(HERE, f) for f in ("tracker.py", "calibration.py", "settings.py", "voice.py", "recorder.py")]
     stamp = lambda: [os.path.getmtime(f) for f in files]
     start = stamp()
     while True:

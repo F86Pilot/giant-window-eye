@@ -21,3 +21,7 @@ voice/voices/
 
 # ElevenLabs API key for the voice (never commit)
 elevenlabs_key.txt
+
+# Recordings (video of passersby) and where to keep them: stay on this computer
+recordings/
+recordings_folder.txt
