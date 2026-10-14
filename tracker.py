@@ -51,6 +51,8 @@ DETECT_SIZE = 960 if DEVICE == "mps" else 640   # smaller = faster, bigger = see
 SEND_PER_SECOND = 15
 LOST_GRACE = 1.5        # seconds to wait for the followed person to reappear before switching
 FRAME_SIZE = (960, 540) if DEVICE == "mps" else (640, 360)  # camera picture is shrunk to this first
+PHOTO_PER_SECOND = 5    # full-size camera pictures kept for the voice's photos (the main picture is shrunk)
+PHOTO_MAX_AGE = 1.5     # seconds; an older full-size picture isn't used
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "data"))  # saved calibration lives here
 
 # ---- Shared state between the camera thread and the web server ------------
@@ -73,6 +75,7 @@ class LatestFrame:
         self.extra_output = extra_output   # function -> extra ffmpeg output args (recordings), or None
         self.proc = None
         self.frame = None
+        self.photo = None   # (JPEG bytes, time) of the newest full-size picture
         self.lock = threading.Lock()
         threading.Thread(target=self._run, daemon=True).start()
 
@@ -85,6 +88,7 @@ class LatestFrame:
                 self._read_local()
             with self.lock:
                 self.frame = None
+                self.photo = None
             time.sleep(2)
 
     def _set(self, frame):
@@ -96,16 +100,29 @@ class LatestFrame:
         # Wyze's encrypted (rtsps) stream more reliably than OpenCV, and shrinks
         # the picture so detection is faster.
         w, h = FRAME_SIZE
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error",
-               "-rtsp_transport", "tcp", "-timeout", "5000000",
+        # The shrunken picture goes to detection; the voice's photos come from a second, full-size
+        # output (a few JPEGs a second) so Claude sees people in all the detail the camera gives.
+        photo_r, photo_w = os.pipe()
+        transport = ["-rtsp_transport", "tcp", "-timeout", "5000000"] if str(self.source).startswith("rtsp") else []
+        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"] + transport + [
                "-fflags", "nobuffer", "-flags", "low_delay",
                "-i", self.source, "-map", "0:v", "-an", "-vf", f"scale={w}:{h}",
-               "-pix_fmt", "bgr24", "-f", "rawvideo", "-"]
+               "-pix_fmt", "bgr24", "-f", "rawvideo", "-",
+               "-map", "0:v", "-an", "-vf", f"fps={PHOTO_PER_SECOND}", "-q:v", "3",
+               "-c:v", "mjpeg", "-f", "image2pipe", f"pipe:{photo_w}"]
         extra = self.extra_output() if self.extra_output else None
         if extra:
             cmd += extra   # also save the camera's own video for recordings (see recorder.py)
         print(f"Connecting to camera {hide_password(self.source)} ..." + (" (recording)" if extra else ""))
-        proc = self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            proc = self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                                pass_fds=(photo_w,))
+        except Exception:
+            os.close(photo_r)
+            raise
+        finally:
+            os.close(photo_w)
+        threading.Thread(target=self._read_photos, args=(photo_r,), daemon=True).start()
         threading.Thread(target=self._log_errors, args=(proc.stderr,), daemon=True).start()
         size = w * h * 3
         first = True
@@ -122,6 +139,29 @@ class LatestFrame:
         finally:
             proc.kill()
             proc.wait()
+
+    def _read_photos(self, fd):
+        """Keep the newest full-size picture. The pipe carries JPEGs back to back; each ends with FF D9
+        (inside the picture data an FF byte is always followed by 00, so that pair can't appear earlier)."""
+        buf = b""
+        with os.fdopen(fd, "rb", buffering=0) as pipe:
+            while True:
+                chunk = pipe.read(1 << 16)
+                if not chunk:
+                    return
+                buf += chunk
+                while (end := buf.find(b"\xff\xd9")) >= 0:
+                    jpeg, buf = buf[:end + 2], buf[end + 2:]
+                    with self.lock:
+                        self.photo = (jpeg, time.time())
+
+    def photo_frame(self):
+        """The newest full-size camera picture (BGR), or None if there isn't a recent one."""
+        with self.lock:
+            photo = self.photo
+        if photo is None or time.time() - photo[1] > PHOTO_MAX_AGE:
+            return None
+        return cv2.imdecode(np.frombuffer(photo[0], np.uint8), cv2.IMREAD_COLOR)
 
     @staticmethod
     def _log_errors(pipe):
@@ -157,6 +197,13 @@ class LatestFrame:
 
 
 camera_reader = None
+
+
+def photo_frame():
+    """What the voice takes its photos from: the camera's full-size picture, or (local cameras, or
+    just after a reconnect) the shrunken detection picture."""
+    full = camera_reader.photo_frame() if camera_reader else None
+    return full if full is not None else clean_frame
 
 
 def detect_loop():
@@ -483,7 +530,7 @@ def start_voice():
             with lock:
                 return {"present": state["present"], "id": state["id"], "box": state["box"]}
 
-        voice = Voice(DATA_DIR, read_person, lambda: clean_frame,
+        voice = Voice(DATA_DIR, read_person, photo_frame,
                       lambda msg: send_all(cal_clients, json.dumps(msg)))
         voice.send_eye = lambda msg: send_all(clients, json.dumps(msg))   # the eye acts out each line
     except Exception:
