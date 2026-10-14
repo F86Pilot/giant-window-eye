@@ -352,8 +352,9 @@ class Store:
 
 
 class Voice:
-    """read_person() -> the tracker's state (present, id, box); read_frame() -> the newest clean
-    camera picture (BGR); send(msg) -> async, sends to every open controls page."""
+    """read_person() -> the tracker's state (present, id, box, frame); read_frame(frame) -> the camera
+    picture (BGR) of that frame number, as sharp as the camera gives; send(msg) -> async, sends to
+    every open controls page."""
 
     def __init__(self, data_dir, read_person, read_frame, send):
         self.read_person, self.read_frame, self.send = read_person, read_frame, send
@@ -388,9 +389,10 @@ class Voice:
         self.line_number = max([h.get("n", 0) for h in self.history] + [0])   # carry on from saved history
 
     # ---- See and write (Claude), speak (Piper) ----
-    def crop(self, box):
-        """The person's box from the camera picture, padded to show what's around them."""
-        f = self.read_frame()
+    def crop(self, box, frame=None):
+        """The person's box from the camera picture, padded to show what's around them. `frame` is the
+        number of the camera frame the box was measured on (so the crop is cut from that same moment)."""
+        f = self.read_frame(frame)
         if f is None:
             return None
         h, w = f.shape[:2]
@@ -653,7 +655,7 @@ class Voice:
                     await self.status(f"#{pid} {why}, no line")
                     return
                 await asyncio.sleep(0.1)
-            image = self.crop(p["box"])
+            image = await asyncio.to_thread(self.crop, p["box"], p.get("frame"))   # may wait briefly for the full-size picture
             if image is None:
                 await self.status("No camera picture yet")
                 return

@@ -51,12 +51,11 @@ DETECT_SIZE = 960 if DEVICE == "mps" else 640   # smaller = faster, bigger = see
 SEND_PER_SECOND = 15
 LOST_GRACE = 1.5        # seconds to wait for the followed person to reappear before switching
 FRAME_SIZE = (960, 540) if DEVICE == "mps" else (640, 360)  # camera picture is shrunk to this first
-PHOTO_PER_SECOND = 5    # full-size camera pictures kept for the voice's photos (the main picture is shrunk)
-PHOTO_MAX_AGE = 1.5     # seconds; an older full-size picture isn't used
+PHOTO_KEEP = 30         # how many recent full-size camera pictures to keep for the voice's photos
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "data"))  # saved calibration lives here
 
 # ---- Shared state between the camera thread and the web server ------------
-state = {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None}
+state = {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None}
 debug_jpeg = None
 clean_frame = None   # newest camera picture without boxes drawn on it (the voice takes photos from it)
 lock = threading.Lock()
@@ -75,8 +74,15 @@ class LatestFrame:
         self.extra_output = extra_output   # function -> extra ffmpeg output args (recordings), or None
         self.proc = None
         self.frame = None
-        self.photo = None   # (JPEG bytes, time) of the newest full-size picture
         self.lock = threading.Lock()
+        # Every camera frame gets a number. The shrunken picture (for detection) and the full-size one
+        # (for the voice's photos) arrive separately, so the numbers let the voice crop from the very
+        # frame its person-box was measured on, even though the full-size picture arrives a little later.
+        self.next_index = 0       # number for the next connection's first frame
+        self.frame_index = None   # number of the newest shrunken frame
+        self.taken_index = None   # number of the frame get() handed out last
+        self.photos = {}          # frame number -> full-size JPEG (the last PHOTO_KEEP)
+        self.new_photo = threading.Condition(self.lock)
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
@@ -88,12 +94,13 @@ class LatestFrame:
                 self._read_local()
             with self.lock:
                 self.frame = None
-                self.photo = None
+                self.photos.clear()
             time.sleep(2)
 
-    def _set(self, frame):
+    def _set(self, frame, index=None):
         with self.lock:
             self.frame = frame
+            self.frame_index = index
 
     def _read_network(self):
         # Network cameras are read through the ffmpeg program, which handles the
@@ -101,15 +108,16 @@ class LatestFrame:
         # the picture so detection is faster.
         w, h = FRAME_SIZE
         # The shrunken picture goes to detection; the voice's photos come from a second, full-size
-        # output (a few JPEGs a second) so Claude sees people in all the detail the camera gives.
+        # output (every frame as a JPEG) so Claude sees people in all the detail the camera gives.
+        # "-fps_mode passthrough": exactly one picture out per frame in, so the two outputs stay in step.
         photo_r, photo_w = os.pipe()
         transport = ["-rtsp_transport", "tcp", "-timeout", "5000000"] if str(self.source).startswith("rtsp") else []
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"] + transport + [
                "-fflags", "nobuffer", "-flags", "low_delay",
-               "-i", self.source, "-map", "0:v", "-an", "-vf", f"scale={w}:{h}",
+               "-i", self.source, "-map", "0:v", "-an", "-fps_mode", "passthrough", "-vf", f"scale={w}:{h}",
                "-pix_fmt", "bgr24", "-f", "rawvideo", "-",
-               "-map", "0:v", "-an", "-vf", f"fps={PHOTO_PER_SECOND}", "-q:v", "3",
-               "-c:v", "mjpeg", "-f", "image2pipe", f"pipe:{photo_w}"]
+               "-map", "0:v", "-an", "-fps_mode", "passthrough", "-q:v", "3",
+               "-c:v", "mjpeg", "-flush_packets", "1", "-f", "image2pipe", f"pipe:{photo_w}"]
         extra = self.extra_output() if self.extra_output else None
         if extra:
             cmd += extra   # also save the camera's own video for recordings (see recorder.py)
@@ -122,10 +130,12 @@ class LatestFrame:
             raise
         finally:
             os.close(photo_w)
-        threading.Thread(target=self._read_photos, args=(photo_r,), daemon=True).start()
+        base = self.next_index
+        threading.Thread(target=self._read_photos, args=(photo_r, base), daemon=True).start()
         threading.Thread(target=self._log_errors, args=(proc.stderr,), daemon=True).start()
         size = w * h * 3
         first = True
+        count = 0
         try:
             while True:
                 data = proc.stdout.read(size)
@@ -135,15 +145,19 @@ class LatestFrame:
                 if first:
                     print("Camera connected")
                     first = False
-                self._set(np.frombuffer(data, np.uint8).reshape(h, w, 3).copy())
+                self._set(np.frombuffer(data, np.uint8).reshape(h, w, 3).copy(), base + count)
+                count += 1
         finally:
+            self.next_index = base + count + 1000   # a reconnect's numbers never overlap this one's
             proc.kill()
             proc.wait()
 
-    def _read_photos(self, fd):
-        """Keep the newest full-size picture. The pipe carries JPEGs back to back; each ends with FF D9
-        (inside the picture data an FF byte is always followed by 00, so that pair can't appear earlier)."""
+    def _read_photos(self, fd, base):
+        """Collect the full-size pictures, numbered to match the shrunken frames. The pipe carries JPEGs
+        back to back; each ends with FF D9 (inside the picture data an FF byte is always followed by 00,
+        so that pair can't appear earlier)."""
         buf = b""
+        n = 0
         with os.fdopen(fd, "rb", buffering=0) as pipe:
             while True:
                 chunk = pipe.read(1 << 16)
@@ -152,16 +166,36 @@ class LatestFrame:
                 buf += chunk
                 while (end := buf.find(b"\xff\xd9")) >= 0:
                     jpeg, buf = buf[:end + 2], buf[end + 2:]
-                    with self.lock:
-                        self.photo = (jpeg, time.time())
+                    with self.new_photo:
+                        self.photos[base + n] = jpeg
+                        n += 1
+                        for old in [k for k in self.photos if k < base + n - PHOTO_KEEP]:
+                            del self.photos[old]
+                        self.new_photo.notify_all()
 
-    def photo_frame(self):
-        """The newest full-size camera picture (BGR), or None if there isn't a recent one."""
-        with self.lock:
-            photo = self.photo
-        if photo is None or time.time() - photo[1] > PHOTO_MAX_AGE:
+    def photo_frame(self, index=None, wait=0.8):
+        """The full-size camera picture (BGR) of frame number `index`, or the newest one if None.
+        It arrives a little after the shrunken frame, so this waits up to `wait` seconds for it.
+        None if there isn't one."""
+        deadline = time.time() + (wait if index is not None else 0)
+        with self.new_photo:
+            while True:
+                if index is None:
+                    key = max(self.photos, default=None)
+                elif index in self.photos:
+                    key = index
+                else:
+                    near = min(self.photos, key=lambda k: abs(k - index), default=None)
+                    newest = max(self.photos, default=-1)
+                    key = near if near is not None and abs(near - index) <= 3 and newest > index else None
+                    if key is None and newest <= index and time.time() < deadline:
+                        self.new_photo.wait(deadline - time.time())
+                        continue
+                break
+            jpeg = self.photos.get(key) if key is not None else None
+        if jpeg is None:
             return None
-        return cv2.imdecode(np.frombuffer(photo[0], np.uint8), cv2.IMREAD_COLOR)
+        return cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
 
     @staticmethod
     def _log_errors(pipe):
@@ -193,16 +227,18 @@ class LatestFrame:
     def get(self):
         with self.lock:
             frame, self.frame = self.frame, None
+            self.taken_index = self.frame_index
         return frame
 
 
 camera_reader = None
 
 
-def photo_frame():
-    """What the voice takes its photos from: the camera's full-size picture, or (local cameras, or
-    just after a reconnect) the shrunken detection picture."""
-    full = camera_reader.photo_frame() if camera_reader else None
+def photo_frame(index=None):
+    """What the voice takes its photos from: the camera's full-size picture of frame number `index`
+    (the one the person-box was measured on), or (local cameras, or just after a reconnect) the
+    shrunken detection picture."""
+    full = camera_reader.photo_frame(index) if camera_reader else None
     return full if full is not None else clean_frame
 
 
@@ -232,6 +268,7 @@ def _detect_loop(model, camera):
         if frame is None:
             time.sleep(0.01)
             continue
+        frame_no = camera.taken_index   # which camera frame this is (see LatestFrame)
         h, w = frame.shape[:2]
         now = time.time()
 
@@ -276,13 +313,13 @@ def _detect_loop(model, camera):
             x1, y1, x2, y2 = box
             tx, ty = (x1 + x2) / 2, y1 + (y2 - y1) * HEAD_POINT
             last_target = {"present": True, "id": following, "x": tx / w, "y": ty / h, "size": (y2 - y1) / h,
-                           "box": [x1 / w, y1 / h, x2 / w, y2 / h]}
+                           "box": [x1 / w, y1 / h, x2 / w, y2 / h], "frame": frame_no}
             if now - last_print > 2:
                 last_print = now
                 t = last_target
                 print(f"person #{following}  x={t['x']:.2f}  y={t['y']:.2f}  size={t['size']:.2f}")
         # If they briefly vanish (e.g. behind a tree), keep looking where they were.
-        new = last_target or {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None}
+        new = last_target or {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None}
         with lock:
             state.update(new)
 
@@ -528,7 +565,8 @@ def start_voice():
 
         def read_person():
             with lock:
-                return {"present": state["present"], "id": state["id"], "box": state["box"]}
+                return {"present": state["present"], "id": state["id"], "box": state["box"],
+                        "frame": state["frame"]}   # "frame": which camera frame the box was measured on
 
         voice = Voice(DATA_DIR, read_person, photo_frame,
                       lambda msg: send_all(cal_clients, json.dumps(msg)))
