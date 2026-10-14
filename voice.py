@@ -395,7 +395,9 @@ class Voice:
             return None
         h, w = f.shape[:2]
         x1, y1, x2, y2 = box[0] * w, box[1] * h, box[2] * w, box[3] * h
-        pw, ph = (x2 - x1) * 1.0, (y2 - y1) * 0.4
+        # Side padding follows the person's height too: someone seen side-on is a narrow box, and a dog
+        # on a leash walks about a body-length ahead of them.
+        pw, ph = max((x2 - x1) * 1.0, (y2 - y1) * 0.8), (y2 - y1) * 0.4
         part = f[max(0, int(y1 - ph)):int(y2 + ph), max(0, int(x1 - pw)):int(x2 + pw)]
         if part.size == 0:
             return None
