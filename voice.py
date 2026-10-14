@@ -66,6 +66,7 @@ CHARACTERS = {
 FAST_ZONE_WAIT = 3.0      # seconds a fast rider's line waits for them to reach a talk zone ("zone" mode)
 PHOTO_DAYS = 14           # the photo used for each line is kept this long (Live tab, for checking picks)
 SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
+STILL_OK = 3.0            # "only people who move": someone standing still this long counts too (people stop to look)
 
 DEFAULTS = {
     "enabled": True,
@@ -619,8 +620,9 @@ class Voice:
         try:
             s = self.store.settings
             t0 = time.time()
-            # 1. Take the photo once they're out of the no-photo zones and (if mustMove) have moved,
-            #    so a mailbox or bush mistaken for a person never gets a line.
+            # 1. Take the photo once they're out of the no-photo zones and (if mustMove) have moved or
+            #    stood still for STILL_OK seconds, so a mailbox or bush briefly mistaken for a person
+            #    doesn't get a line (a lasting false detection still can: draw an ignore zone over it).
             now_or_never = manual or followup is not None   # photo and play right away
             if not now_or_never:
                 await asyncio.sleep(SETTLE)
@@ -647,7 +649,8 @@ class Voice:
                             return
                         await self.status(f"#{pid} too fast ({speed} heights/s, a bike?), no line")
                         return
-                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or not s["mustMove"])
+                still = time.time() - first[0] >= STILL_OK   # stopped to look; brief false detections don't last this long
+                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or still or not s["mustMove"])
                                     and (speed is not None or not s["maxSpeed"])):
                     break
                 if time.time() - t0 > s["zoneWait"]:
