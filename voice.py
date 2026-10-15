@@ -66,6 +66,7 @@ CHARACTERS = {
 FAST_ZONE_WAIT = 3.0      # seconds a fast rider's line waits for them to reach a talk zone ("zone" mode)
 PHOTO_DAYS = 14           # the photo used for each line is kept this long (Live tab, for checking picks)
 SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
+STILL_STOP = 20.0         # "still here" lines stop for someone who hasn't shifted at all for this long (not really a person)
 RIDER_SPEED = 1.3         # a person with a bicycle under them, moving faster than this (own heights per second): a rider
 RIDER_LOOK = 1.5          # ...so wait this long before photographing someone on a bike, to see how fast they go
 STILL_OK = 3.0            # "only people who move": someone standing still this long counts too (people stop to look)
@@ -85,7 +86,9 @@ DEFAULTS = {
     "talkZones": [],            # shapes (lists of [x, y], 0-1 in the camera picture): play when feet are inside
     "noPhotoZones": [],         # shapes: don't take the photo while feet are inside
     "zoneWait": 20,             # seconds to wait for a photo, and then for them to reach a talk zone
-    "lingerSeconds": 20,        # someone still here this long after their line gets one more (once). 0 = off
+    "lingerSeconds": 10,        # someone still here this long after their line gets another, freshly written. 0 = off
+    "lingerEvery": 15,          # ...and another this many seconds after each of those, while they stay and move about. 0 = just one
+    "lingerMax": 6,             # at most this many of those per person
     "maxSpeed": 2.0,            # skip anyone faster than this, in their own heights per second (bikes). 0 = off
     "mustMove": True,           # only talk to "people" whose feet moved (a quarter of their height): skips static objects
 }
@@ -342,7 +345,7 @@ class Store:
             if value is None:
                 return False
         else:
-            limits = {"lingerSeconds": (0, 600), "cooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
+            limits = {"lingerSeconds": (0, 600), "lingerEvery": (0, 600), "lingerMax": (0, 50), "cooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
                       "zoneWait": (3, 120)}
             lo, hi = limits[key]
             try:
@@ -381,8 +384,11 @@ class Voice:
         except (OSError, ValueError):
             pass
         self.busy = False
-        self.spoken_to = {}      # person ID -> (when their line played, the line), for "still here?"
-        self.followed_up = set() # person IDs that already got their one "still here" line
+        self.spoken_to = {}      # person ID -> (when their last line played, the line), for "still here?"
+        self.followed_up = {}    # person ID -> how many "still here" lines they've had
+        self.said_to = {}        # person ID -> every line said to them (so new ones are really new)
+        self.first_said = {}     # person ID -> when they first got a line
+        self.anchor = {}         # person ID -> (when, x, y) they last shifted position
         self.on_play = None      # called with (audio, content type, text) when a line plays
         self.speakers = {}       # yard speakers (speaker/player.py on a Pi): websocket -> its last status
         self.send_eye = None     # async: sends a message to the eye pages (set by the tracker)
@@ -615,7 +621,7 @@ class Voice:
 
     async def comment(self, pid, manual=False, followup=None):
         """Photo -> line -> wait for the talk zone -> play. One at a time.
-        followup = (seconds, earlier line): they're still here after their line, so call that out."""
+        followup = {"since", "n", "lines", "here"}: they're still here after their line(s); say something new."""
         if self.busy:
             return
         self.busy = True
@@ -694,8 +700,9 @@ class Voice:
             try:
                 note = ""
                 if followup:
-                    note = (f" This person is STILL standing here, {followup[0]} seconds after you said to them:"
-                            f" {json.dumps(followup[1])}. Call out that they're still here; don't repeat that line.")
+                    note = (f" This person is STILL here, {followup['here']} seconds after you first spoke to them,"
+                            f" and has stuck around for more. You already said to them: {json.dumps(followup['lines'][-4:])}."
+                            f" Say something NEW about what you see them doing right now. Never repeat or echo those lines.")
                 line, source, cost, sound = await self.make_line(image, note)
                 if followup:
                     source += " (still here)"
@@ -735,8 +742,10 @@ class Voice:
                 if go:
                     entry["played"] = True
                     entry["seconds"]["waited"] = round(time.time() - t_ready, 1)
-                    if followup is None:
+                    if not line.strip().upper().rstrip(".") == SKIP:
                         self.spoken_to[pid] = (time.time(), line)
+                        self.said_to.setdefault(pid, []).append(line)
+                        self.first_said.setdefault(pid, time.time())
                     await self.play(line, sound)
                 else:
                     entry["skipped"] = "never reached a talk zone"
@@ -752,6 +761,20 @@ class Voice:
             await self.status("Something went wrong; see the log")
         finally:
             self.busy = False
+
+    def still_moving(self, pid, p):
+        """Has this person shifted position (a tenth of their height) within the last STILL_STOP seconds?
+        Someone who hasn't moved at all in that long is probably not a person worth more lines."""
+        box = p["box"]
+        if not box:
+            return False
+        fx, fy = feet(box)
+        height = box[3] - box[1]
+        aspect = p.get("aspect") or 16 / 9
+        a = self.anchor.get(pid)
+        if a is None or (((fx - a[1]) * aspect) ** 2 + (fy - a[2]) ** 2) ** 0.5 >= 0.1 * height:
+            a = self.anchor[pid] = (time.time(), fx, fy)
+        return time.time() - a[0] < STILL_STOP
 
     def should_talk(self, ignore_cooldown=False):
         s = self.store.settings
@@ -774,15 +797,22 @@ class Voice:
                     last_id = pid
                     if self.should_talk():
                         asyncio.create_task(self.comment(pid))
-                linger = self.store.settings["lingerSeconds"]
+                s = self.store.settings
+                moving = self.still_moving(pid, p) if pid is not None else False
                 spoke = self.spoken_to.get(pid)
-                if (linger and spoke and pid not in self.followed_up and time.time() - spoke[0] >= linger
+                n = self.followed_up.get(pid, 0)
+                wait = s["lingerSeconds"] if n == 0 else s["lingerEvery"]
+                if (spoke and wait and n < s["lingerMax"] and moving and time.time() - spoke[0] >= wait
                         and self.should_talk(ignore_cooldown=True)):
-                    self.followed_up.add(pid)   # only ever once per person
-                    asyncio.create_task(self.comment(pid, followup=(round(time.time() - spoke[0]), spoke[1])))
+                    self.followed_up[pid] = n + 1
+                    self.spoken_to[pid] = (time.time(), spoke[1])   # the next wait counts from now, even if this one fails
+                    asyncio.create_task(self.comment(pid, followup={
+                        "since": round(time.time() - spoke[0]), "n": n + 1, "lines": self.said_to.get(pid, [spoke[1]]),
+                        "here": round(time.time() - self.first_said.get(pid, spoke[0]))}))
                 if len(self.spoken_to) > 200:   # forget people long gone
                     for old in sorted(self.spoken_to, key=lambda k: self.spoken_to[k][0])[:100]:
-                        self.spoken_to.pop(old, None)
+                        for d in (self.spoken_to, self.followed_up, self.said_to, self.first_said, self.anchor):
+                            d.pop(old, None)
                 if time.time() - last_sent > 0.25:   # let pages show where the person is standing
                     last_sent = time.time()
                     box = p["box"] if p["present"] else None

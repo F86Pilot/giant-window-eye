@@ -238,8 +238,15 @@
       <p class="help">Only talk once their feet have moved a little, so bushes and mailboxes never get a line.</p></div>
     <div class="set"><div class="set-top"><span class="label">"Still here?" line after (seconds)</span>
       <input type="number" data-v="lingerSeconds" min="0" max="600" inputmode="numeric"></div>
-      <p class="help">If someone is still standing there this long after their line, the eye says one more thing
-        about them sticking around. Only once per person. 0 = off.</p></div>
+      <p class="help">If someone is still around this long after their line, the eye writes a new one about what
+        they're doing now (no recorded lines). 0 = off.</p></div>
+    <div class="set"><div class="set-top"><span class="label">...then another every (seconds)</span>
+      <input type="number" data-v="lingerEvery" min="0" max="600" inputmode="numeric"></div>
+      <p class="help">Keeps going this often while they stay and move about; stops if they stand perfectly
+        still for 20 seconds or leave. 0 = just the one.</p></div>
+    <div class="set"><div class="set-top"><span class="label">Most "still here" lines per person</span>
+      <input type="number" data-v="lingerMax" min="0" max="50" inputmode="numeric"></div>
+      <p class="help">Each one costs about a cent.</p></div>
     <div class="set"><div class="set-top"><span class="label">Skip anyone faster than (heights/second)</span>
       <input type="number" data-v="maxSpeed" min="0" max="20" step="0.1" inputmode="decimal"></div>
       <p class="help">Speed in the person's own heights per second: walking is about 0.6–1, jogging 1.5–2.5,
