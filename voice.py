@@ -788,6 +788,7 @@ class Voice:
         await asyncio.to_thread(self.piper_wav, "Hello.", PIPER_VOICE)   # first run is slow; do it now
         print(f"Voice ready ({'Claude ' + self.store.settings['model'] if self.client else 'canned lines only'})")
         last_id, last_sent = None, 0.0
+        want = None   # someone new we haven't started a line for yet (the voice may be busy or cooling down)
         while True:
             await asyncio.sleep(0.1)
             try:
@@ -795,8 +796,14 @@ class Voice:
                 pid = p["id"] if p["present"] else None
                 if pid is not None and pid != last_id:
                     last_id = pid
-                    if self.should_talk():
-                        asyncio.create_task(self.comment(pid))
+                    want = pid
+                # The tracker sometimes hands someone a new ID number while the voice is still working on
+                # their old one; keep trying for the current person until it can start (or they leave).
+                if want is not None and want != pid:
+                    want = None
+                elif want is not None and self.should_talk():
+                    want = None
+                    asyncio.create_task(self.comment(pid))
                 s = self.store.settings
                 moving = self.still_moving(pid, p) if pid is not None else False
                 spoke = self.spoken_to.get(pid)
