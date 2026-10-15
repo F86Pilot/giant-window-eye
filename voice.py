@@ -66,6 +66,7 @@ CHARACTERS = {
 FAST_ZONE_WAIT = 3.0      # seconds a fast rider's line waits for them to reach a talk zone ("zone" mode)
 PHOTO_DAYS = 14           # the photo used for each line is kept this long (Live tab, for checking picks)
 SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
+LINGER_RADIUS = 2.5       # "still here" lines only for people who stay within this many of their own heights of where they were spoken to
 STILL_STOP = 20.0         # "still here" lines stop for someone who hasn't shifted at all for this long (not really a person)
 RIDER_SPEED = 1.3         # a person with a bicycle under them, moving faster than this (own heights per second): a rider
 RIDER_LOOK = 1.5          # ...so wait this long before photographing someone on a bike, to see how fast they go
@@ -74,6 +75,7 @@ STILL_OK = 3.0            # "only people who move": someone standing still this 
 DEFAULTS = {
     "enabled": True,
     "cooldown": 15,             # seconds between lines
+    "fastCooldown": 4,          # ...but someone on a bike can get their line this soon after another (riders come in bunches)
     "dailyCap": 150,            # Claude lines per day; after that, canned lines (free)
     "quietFrom": 22, "quietTo": 7,   # no talking between these hours (same number = never quiet)
     "model": "claude-opus-5-5",
@@ -345,7 +347,7 @@ class Store:
             if value is None:
                 return False
         else:
-            limits = {"lingerSeconds": (0, 600), "lingerEvery": (0, 600), "lingerMax": (0, 50), "cooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
+            limits = {"lingerSeconds": (0, 600), "lingerEvery": (0, 600), "lingerMax": (0, 50), "cooldown": (0, 600), "fastCooldown": (0, 600), "dailyCap": (0, 2000), "quietFrom": (0, 23), "quietTo": (0, 23),
                       "zoneWait": (3, 120)}
             lo, hi = limits[key]
             try:
@@ -389,6 +391,7 @@ class Voice:
         self.said_to = {}        # person ID -> every line said to them (so new ones are really new)
         self.first_said = {}     # person ID -> when they first got a line
         self.anchor = {}         # person ID -> (when, x, y) they last shifted position
+        self.spoke_pos = {}      # person ID -> (x, y, height) where they stood when first spoken to
         self.on_play = None      # called with (audio, content type, text) when a line plays
         self.speakers = {}       # yard speakers (speaker/player.py on a Pi): websocket -> its last status
         self.send_eye = None     # async: sends a message to the eye pages (set by the tracker)
@@ -681,6 +684,9 @@ class Voice:
                     await self.status(f"#{pid} {why}, no line")
                     return
                 await asyncio.sleep(0.1)
+            if p.get("rider") and not now_or_never and time.time() - self.last_spoken < s["cooldown"]:
+                await self.status(f"#{pid} is on a bike but not going fast, and a line just played, no line")
+                return   # (only riders who get the fast line skip the full cooldown)
             image = await asyncio.to_thread(self.crop, p["box"], p.get("frame"))   # may wait briefly for the full-size picture
             if image is None:
                 await self.status("No camera picture yet")
@@ -729,6 +735,8 @@ class Voice:
                      "speed": speed, "photo": photo}
             if sound is None:
                 entry["skipped"] = "nobody there"
+            elif followup is not None and self.same_person(pid) is None:
+                entry["skipped"] = "they left before it was ready"   # don't talk to an empty yard
             else:
                 go = now_or_never or not s["talkZones"] or reached["talk"]
                 if not go:
@@ -746,6 +754,9 @@ class Voice:
                         self.spoken_to[pid] = (time.time(), line)
                         self.said_to.setdefault(pid, []).append(line)
                         self.first_said.setdefault(pid, time.time())
+                        q = self.same_person(pid)
+                        if q:
+                            self.spoke_pos.setdefault(pid, (*feet(q["box"]), q["box"][3] - q["box"][1]))
                     await self.play(line, sound)
                 else:
                     entry["skipped"] = "never reached a talk zone"
@@ -762,6 +773,16 @@ class Voice:
         finally:
             self.busy = False
 
+    def stayed_near(self, pid, p):
+        """Still within LINGER_RADIUS of their own heights from where they were first spoken to (so someone
+        walking through the picture doesn't count as lingering)."""
+        a = self.spoke_pos.get(pid)
+        if a is None or not p["box"]:
+            return False
+        fx, fy = feet(p["box"])
+        aspect = p.get("aspect") or 16 / 9
+        return (((fx - a[0]) * aspect) ** 2 + (fy - a[1]) ** 2) ** 0.5 <= LINGER_RADIUS * a[2]
+
     def still_moving(self, pid, p):
         """Has this person shifted position (a tenth of their height) within the last STILL_STOP seconds?
         Someone who hasn't moved at all in that long is probably not a person worth more lines."""
@@ -776,11 +797,11 @@ class Voice:
             a = self.anchor[pid] = (time.time(), fx, fy)
         return time.time() - a[0] < STILL_STOP
 
-    def should_talk(self, ignore_cooldown=False):
+    def should_talk(self, ignore_cooldown=False, cooldown=None):
         s = self.store.settings
         a, b, h = s["quietFrom"], s["quietTo"], datetime.datetime.now().hour
         quiet = a != b and ((a < b and a <= h < b) or (a > b and (h >= a or h < b)))
-        cooled = ignore_cooldown or time.time() - self.last_spoken >= s["cooldown"]
+        cooled = ignore_cooldown or time.time() - self.last_spoken >= (s["cooldown"] if cooldown is None else cooldown)
         return s["enabled"] and not self.busy and cooled and not quiet
 
     async def run(self):
@@ -801,7 +822,8 @@ class Voice:
                 # their old one; keep trying for the current person until it can start (or they leave).
                 if want is not None and want != pid:
                     want = None
-                elif want is not None and self.should_talk():
+                elif want is not None and self.should_talk(
+                        cooldown=self.store.settings["fastCooldown"] if p.get("rider") else None):
                     want = None
                     asyncio.create_task(self.comment(pid))
                 s = self.store.settings
@@ -809,7 +831,8 @@ class Voice:
                 spoke = self.spoken_to.get(pid)
                 n = self.followed_up.get(pid, 0)
                 wait = s["lingerSeconds"] if n == 0 else s["lingerEvery"]
-                if (spoke and wait and n < s["lingerMax"] and moving and time.time() - spoke[0] >= wait
+                if (spoke and wait and n < s["lingerMax"] and moving and self.stayed_near(pid, p)
+                        and time.time() - spoke[0] >= wait
                         and self.should_talk(ignore_cooldown=True)):
                     self.followed_up[pid] = n + 1
                     self.spoken_to[pid] = (time.time(), spoke[1])   # the next wait counts from now, even if this one fails
@@ -818,7 +841,7 @@ class Voice:
                         "here": round(time.time() - self.first_said.get(pid, spoke[0]))}))
                 if len(self.spoken_to) > 200:   # forget people long gone
                     for old in sorted(self.spoken_to, key=lambda k: self.spoken_to[k][0])[:100]:
-                        for d in (self.spoken_to, self.followed_up, self.said_to, self.first_said, self.anchor):
+                        for d in (self.spoken_to, self.followed_up, self.said_to, self.first_said, self.anchor, self.spoke_pos):
                             d.pop(old, None)
                 if time.time() - last_sent > 0.25:   # let pages show where the person is standing
                     last_sent = time.time()

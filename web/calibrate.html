@@ -242,8 +242,9 @@
         they're doing now (no recorded lines). 0 = off.</p></div>
     <div class="set"><div class="set-top"><span class="label">...then another every (seconds)</span>
       <input type="number" data-v="lingerEvery" min="0" max="600" inputmode="numeric"></div>
-      <p class="help">Keeps going this often while they stay and move about; stops if they stand perfectly
-        still for 20 seconds or leave. 0 = just the one.</p></div>
+      <p class="help">Keeps going this often while they stay and move about; only for people who stay near where
+        they were first spoken to (not walkers passing through); stops if they stand perfectly still for 20
+        seconds or leave. 0 = just the one.</p></div>
     <div class="set"><div class="set-top"><span class="label">Most "still here" lines per person</span>
       <input type="number" data-v="lingerMax" min="0" max="50" inputmode="numeric"></div>
       <p class="help">Each one costs about a cent.</p></div>
@@ -253,6 +254,9 @@
         bikes 3 or more. Faster than this = no line (and no cost). Each line shows its speed. 0 = off.</p></div>
     <div class="set"><div class="set-top"><span class="label">Seconds between lines</span>
       <input type="number" data-v="cooldown" min="0" max="600" inputmode="numeric"></div></div>
+    <div class="set"><div class="set-top"><span class="label">Seconds between lines for bike riders</span>
+      <input type="number" data-v="fastCooldown" min="0" max="600" inputmode="numeric"></div>
+      <p class="help">Riders come in bunches, so they can get their quick line this soon after the last one.</p></div>
     <div class="set"><div class="set-top"><span class="label">Seconds to wait for a photo / talk zone</span>
       <input type="number" data-v="zoneWait" min="3" max="120" inputmode="numeric"></div></div>
     <div class="set"><div class="set-top"><span class="label">Quiet from (hour, 0–23)</span>
