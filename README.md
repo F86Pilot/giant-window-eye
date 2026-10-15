@@ -45,7 +45,8 @@ The eye is drawn live in a web browser, so you can try it on any laptop or phone
 
 Without the voice, nothing does: the camera, detection, eye and recordings all stay on
 your own network. **With the voice on**, each line sends:
-- a small cropped photo of the person to **Claude** (Anthropic) to write the joke, and
+- a small cropped photo of the person (cut from the camera's full-size picture, at most
+  640 px) to **Claude** (Anthropic) to write the joke, and
 - the line's text to **ElevenLabs** to speak it.
 
 Recordings, and the photo each line was based on (shown on the phone page for checking the
@@ -149,9 +150,18 @@ Then under Settings → Voice → *Lines*, choose:
 - **Written live** — Claude writes a fresh line and ElevenLabs speaks it (slowest, most specific).
 - **Recorded: random** — instant and free, but not about the person.
 
-**Fast riders:** people faster than a set speed (in their own heights per second; bikes are
-~3+) get a quick random line from the library's "fast" set, with no photo and no AI, either
-right away or when they reach a talk zone.
+**Fast riders:** anyone with a bicycle or motorbike under them (a second copy of the detector
+looks for one), moving faster than about 1.3 of their own heights per second (walking a bike
+is ~1, riding 1.7–3), gets a quick random line from the library's "fast" set, with no photo
+and no AI. Riders come in bunches, so they can talk 4 s after the last line instead of 15.
+Anyone else faster than *Skip anyone faster than* is skipped (or gets a fast line too).
+
+**Staying around:** if someone is still near where they were first spoken to (within 2.5 of
+their own heights, in a talk zone, still shifting about), the eye writes a fresh line from a
+new photo, told what it already said, after 10 s and then every 15 s, up to 6 times per
+person. Walkers just passing through don't get one, and nobody gets a line after they've gone.
+Someone who stands still for 3 s counts as a person (kids stop to look); settings are under
+*When to talk*.
 
 The recordings aren't in git (they're made with your ElevenLabs account and the voice's own
 license terms apply); edit a line's text and run the command again with `--redo` to re-record.
@@ -241,6 +251,11 @@ slow anything down and uses the same single camera connection.
   it's already following even at low confidence, so it doesn't lose them in the dark.
 - **Wyze cameras sometimes ignore the first connection** while their Wi-Fi wakes up; the
   tracker just retries.
+- **Photos come from the full-size picture.** Detection runs on a shrunken 960×540 frame, but
+  ffmpeg also writes every frame as a full-size JPEG; the voice crops from the exact frame its
+  person-box was measured on (frames are numbered). Cropping from "the newest" one put walkers
+  off-centre, since it arrives ~0.3 s later. The crop is padded by the person's height as well
+  as their width, so a dog a leash-length ahead of someone seen side-on stays in frame.
 - **Speed of the voice.** With recorded lines, about 2.5 s from someone appearing to the
   line being ready (0.6 s waiting to see them move, then Claude picking); written live, about
   3.5–4 s (Claude ~1.5 s, ElevenLabs ~1.2 s). *Sonnet 5.5* is much faster than *Opus 5.5*
