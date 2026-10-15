@@ -66,6 +66,8 @@ CHARACTERS = {
 FAST_ZONE_WAIT = 3.0      # seconds a fast rider's line waits for them to reach a talk zone ("zone" mode)
 PHOTO_DAYS = 14           # the photo used for each line is kept this long (Live tab, for checking picks)
 SETTLE = 0.15             # seconds after someone appears before taking their photo (lets the box settle)
+RIDER_SPEED = 1.3         # a person with a bicycle under them, moving faster than this (own heights per second): a rider
+RIDER_LOOK = 1.5          # ...so wait this long before photographing someone on a bike, to see how fast they go
 STILL_OK = 3.0            # "only people who move": someone standing still this long counts too (people stop to look)
 
 DEFAULTS = {
@@ -629,6 +631,7 @@ class Voice:
             reached = {"talk": False}
             first = None
             speed = None   # their own heights per second: walkers ~0.6-1, joggers 1.5-2.5, bikes 3+
+            rider_tried = False
             while True:
                 p = self.same_person(pid)
                 if p is None:
@@ -642,6 +645,17 @@ class Voice:
                 first = first or (time.time(), fx, fy)
                 dist = ((fx - first[1]) ** 2 + (fy - first[2]) ** 2) ** 0.5
                 moved = dist >= 0.25 * height
+                rider = bool(p.get("rider")) and not now_or_never   # a bicycle seen under them
+                if rider and s["fastLines"] and not rider_tried and time.time() - first[0] >= 0.4 and height > 0:
+                    # Their real speed in their own heights per second (the sideways part is scaled by the
+                    # picture's shape; a person pushing a bike is ~1, people riding 1.7-3 in the clips measured).
+                    aspect = p.get("aspect") or 16 / 9
+                    true_dist = (((fx - first[1]) * aspect) ** 2 + (fy - first[2]) ** 2) ** 0.5
+                    true_speed = round(true_dist / height / (time.time() - first[0]), 1)
+                    if true_speed >= RIDER_SPEED:
+                        rider_tried = True
+                        if await self.fast_line(pid, true_speed, t0, reached["talk"]):
+                            return
                 if time.time() - first[0] >= 0.4 and height > 0:   # long enough to judge their speed
                     speed = round(dist / height / (time.time() - first[0]), 1)
                     if s["maxSpeed"] and speed > s["maxSpeed"] and not now_or_never:
@@ -650,6 +664,9 @@ class Voice:
                         await self.status(f"#{pid} too fast ({speed} heights/s, a bike?), no line")
                         return
                 still = time.time() - first[0] >= STILL_OK   # stopped to look; brief false detections don't last this long
+                if rider and not rider_tried and s["fastLines"] and time.time() - first[0] < RIDER_LOOK:
+                    await asyncio.sleep(0.1)   # on a bike: see how fast they go before deciding
+                    continue
                 if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or still or not s["mustMove"])
                                     and (speed is not None or not s["maxSpeed"])):
                     break

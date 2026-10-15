@@ -51,11 +51,14 @@ DETECT_SIZE = 960 if DEVICE == "mps" else 640   # smaller = faster, bigger = see
 SEND_PER_SECOND = 15
 LOST_GRACE = 1.5        # seconds to wait for the followed person to reappear before switching
 FRAME_SIZE = (960, 540) if DEVICE == "mps" else (640, 360)  # camera picture is shrunk to this first
+BIKE_EVERY = 3          # look for a bicycle under the followed person on every 3rd frame
+BIKE_MEMORY = 1.5       # seconds a "this person is on a bike" sighting stays true
 PHOTO_KEEP = 30         # how many recent full-size camera pictures to keep for the voice's photos
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "data"))  # saved calibration lives here
 
 # ---- Shared state between the camera thread and the web server ------------
-state = {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None}
+state = {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None,
+         "rider": False, "aspect": 16 / 9}
 debug_jpeg = None
 clean_frame = None   # newest camera picture without boxes drawn on it (the voice takes photos from it)
 lock = threading.Lock()
@@ -256,8 +259,23 @@ def detect_loop():
             time.sleep(2)
 
 
+def on_bike(bike_model, frame, box):
+    """Is there a bicycle or motorbike under this person (box = x1, y1, x2, y2 in the frame's pixels)?
+    A separate model instance, so it can't disturb the person tracking."""
+    r = bike_model.predict(frame, imgsz=DETECT_SIZE, classes=[1, 3], conf=0.25, device=DEVICE, verbose=False)[0]
+    x1, y1, x2, y2 = box
+    for bx1, by1, bx2, by2 in r.boxes.xyxy.tolist():
+        ix, iy = max(0, min(x2, bx2) - max(x1, bx1)), max(0, min(y2, by2) - max(y1, by1))
+        if ix * iy > 0.15 * (x2 - x1) * (y2 - y1) and by2 > y1 + 0.5 * (y2 - y1):
+            return True
+    return False
+
+
 def _detect_loop(model, camera):
     global debug_jpeg, clean_frame
+    bike_model = YOLO("yolo11n.pt")
+    frame_count = 0
+    rider_seen = {}         # person ID -> last time a bicycle was seen under them
     confirmed = {}          # person ID -> last time seen, for people sure enough to follow
     last_print = 0
     following = None        # ID number of the person the eye is locked onto
@@ -309,17 +327,22 @@ def _detect_loop(model, camera):
                 print("nobody")
 
         box = people.get(following)
+        frame_count += 1
         if box:
+            if frame_count % BIKE_EVERY == 0 and on_bike(bike_model, frame, box):
+                rider_seen[following] = now
             x1, y1, x2, y2 = box
             tx, ty = (x1 + x2) / 2, y1 + (y2 - y1) * HEAD_POINT
             last_target = {"present": True, "id": following, "x": tx / w, "y": ty / h, "size": (y2 - y1) / h,
-                           "box": [x1 / w, y1 / h, x2 / w, y2 / h], "frame": frame_no}
+                           "box": [x1 / w, y1 / h, x2 / w, y2 / h], "frame": frame_no,
+                           "rider": now - rider_seen.get(following, 0) < BIKE_MEMORY, "aspect": w / h}
             if now - last_print > 2:
                 last_print = now
                 t = last_target
                 print(f"person #{following}  x={t['x']:.2f}  y={t['y']:.2f}  size={t['size']:.2f}")
         # If they briefly vanish (e.g. behind a tree), keep looking where they were.
-        new = last_target or {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None}
+        new = last_target or {"present": False, "id": None, "x": 0.5, "y": 0.5, "size": 0.0, "box": None, "frame": None,
+                              "rider": False, "aspect": w / h}
         with lock:
             state.update(new)
 
@@ -566,7 +589,9 @@ def start_voice():
         def read_person():
             with lock:
                 return {"present": state["present"], "id": state["id"], "box": state["box"],
-                        "frame": state["frame"]}   # "frame": which camera frame the box was measured on
+                        "frame": state["frame"],    # which camera frame the box was measured on
+                        "rider": state["rider"],    # a bicycle seen under them just now
+                        "aspect": state["aspect"]}  # picture width / height
 
         voice = Voice(DATA_DIR, read_person, photo_frame,
                       lambda msg: send_all(cal_clients, json.dumps(msg)))
