@@ -832,6 +832,7 @@ class Voice:
                 n = self.followed_up.get(pid, 0)
                 wait = s["lingerSeconds"] if n == 0 else s["lingerEvery"]
                 if (spoke and wait and n < s["lingerMax"] and moving and self.stayed_near(pid, p)
+                        and (not s["talkZones"] or in_any(p["box"], s["talkZones"]))   # where the speaker can be heard
                         and time.time() - spoke[0] >= wait
                         and self.should_talk(ignore_cooldown=True)):
                     self.followed_up[pid] = n + 1
