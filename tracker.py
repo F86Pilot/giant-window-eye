@@ -53,6 +53,9 @@ LOST_GRACE = 1.5        # seconds to wait for the followed person to reappear be
 FRAME_SIZE = (960, 540) if DEVICE == "mps" else (640, 360)  # camera picture is shrunk to this first
 BIKE_EVERY = 3          # look for a bicycle under the followed person on every 3rd frame
 BIKE_MEMORY = 1.5       # seconds a "this person is on a bike" sighting stays true
+# The camera's first frames after connecting can carry out-of-order timestamps, and the JPEG encoder (and
+# muxers) refuse those; renumbering both outputs the same way keeps every frame and keeps them in step.
+RETIME = "setpts=if(gt(FRAME_RATE\\,5)*lt(FRAME_RATE\\,61)\\,N/FRAME_RATE\\,N/20)/TB"   # steady timeline (20 fps if the camera's rate is unknown)
 PHOTO_KEEP = 30         # how many recent full-size camera pictures to keep for the voice's photos
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(HERE, "data"))  # saved calibration lives here
 
@@ -117,9 +120,9 @@ class LatestFrame:
         transport = ["-rtsp_transport", "tcp", "-timeout", "5000000"] if str(self.source).startswith("rtsp") else []
         cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"] + transport + [
                "-fflags", "nobuffer", "-flags", "low_delay",
-               "-i", self.source, "-map", "0:v", "-an", "-fps_mode", "passthrough", "-vf", f"scale={w}:{h}",
+               "-i", self.source, "-map", "0:v", "-an", "-fps_mode", "passthrough", "-vf", f"scale={w}:{h},{RETIME}",
                "-pix_fmt", "bgr24", "-f", "rawvideo", "-",
-               "-map", "0:v", "-an", "-fps_mode", "passthrough", "-q:v", "3",
+               "-map", "0:v", "-an", "-fps_mode", "passthrough", "-vf", RETIME, "-q:v", "3",
                "-c:v", "mjpeg", "-flush_packets", "1", "-f", "image2pipe", f"pipe:{photo_w}"]
         extra = self.extra_output() if self.extra_output else None
         if extra:
