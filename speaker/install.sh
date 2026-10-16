@@ -30,8 +30,15 @@ printf "[Journal]\nStorage=persistent\nSystemMaxUse=100M\nMaxRetentionSec=1month
   | sudo tee /etc/systemd/journald.conf.d/50-persistent.conf >/dev/null
 sudo systemctl restart systemd-journald
 
+# Stay on Wi-Fi: the Pi Zero's Wi-Fi chip drops off now and then with power saving on, and
+# NetworkManager can give up rejoining for good; the watchdog reconnects (2 min) or restarts (10 min).
+printf "[connection]\nwifi.powersave = 2\n" | sudo tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf >/dev/null
+sudo cp eye-net-watchdog.service /etc/systemd/system/
+
 sed -e "s|__EYE_SERVER__|$SERVER|" -e "s|__SPEAKER_MAC__|$MAC|" eye-speaker.service \
   | sudo tee /etc/systemd/system/eye-speaker.service >/dev/null
 sudo systemctl daemon-reload
-sudo systemctl enable --now eye-speaker
-echo "Yard speaker installed. Log: journalctl -u eye-speaker -f"
+sudo systemctl enable --now eye-speaker eye-net-watchdog
+sudo systemctl restart eye-net-watchdog
+echo "Yard speaker installed. Log: journalctl -u eye-speaker -f (Wi-Fi watchdog: -u eye-net-watchdog)"
+echo "Wi-Fi power saving is off from the next restart (sudo reboot)."

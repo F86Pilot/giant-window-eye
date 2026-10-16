@@ -185,7 +185,9 @@ in the yard.
    ~/eye-speaker/install.sh http://<tracker-computer>.local:8085 <speaker address>
    ```
 
-It starts at boot, keeps its log across restarts (`journalctl -u eye-speaker`), reconnects to the speaker whenever it's turned back on, and plays a
+It starts at boot, keeps its log across restarts (`journalctl -u eye-speaker`), rejoins Wi-Fi
+by itself if it drops off (a watchdog reconnects after 2 minutes offline and restarts the Pi
+after 10; `journalctl -u eye-net-watchdog`), reconnects to the speaker whenever it's turned back on, and plays a
 nearly silent sound every few minutes so the speaker doesn't switch itself off. Its status
 shows on the phone page (*Yard speaker: ready (Soundcore 3, 🔋 72%)*), with a *Test yard
 speaker* button. The battery level comes over the speaker's hands-free connection (many

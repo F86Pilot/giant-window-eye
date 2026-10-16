@@ -1,0 +1,12 @@
+# Keeps the yard speaker Pi on Wi-Fi (speaker/net-watchdog.sh). Installed by speaker/install.sh.
+[Unit]
+Description=Giant Eye yard speaker Wi-Fi watchdog
+After=NetworkManager.service
+
+[Service]
+ExecStart=/home/pi/eye-speaker/net-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
