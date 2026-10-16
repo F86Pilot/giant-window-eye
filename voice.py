@@ -641,7 +641,14 @@ class Voice:
             first = None
             speed = None   # their own heights per second: walkers ~0.6-1, joggers 1.5-2.5, bikes 3+
             rider_tried = False
+            # What held up the photo, in seconds (checks can overlap), for the log: no-photo zone, not moved
+            # yet, too soon to judge speed, watching a bike rider, then waiting for the full-size picture.
+            waits = {"settle": round(time.time() - t0, 2), "zone": 0.0, "move": 0.0, "speed": 0.0, "bike": 0.0}
+            holding, tick = (), time.time()
             while True:
+                for k in holding:
+                    waits[k] += time.time() - tick
+                holding, tick = (), time.time()
                 p = self.same_person(pid)
                 if p is None:
                     if manual:
@@ -674,11 +681,16 @@ class Voice:
                         return
                 still = time.time() - first[0] >= STILL_OK   # stopped to look; brief false detections don't last this long
                 if rider and not rider_tried and s["fastLines"] and time.time() - first[0] < RIDER_LOOK:
+                    holding = ("bike",)
                     await asyncio.sleep(0.1)   # on a bike: see how fast they go before deciding
                     continue
-                if now_or_never or (not in_any(p["box"], s["noPhotoZones"]) and (moved or still or not s["mustMove"])
+                in_zone = in_any(p["box"], s["noPhotoZones"])
+                if now_or_never or (not in_zone and (moved or still or not s["mustMove"])
                                     and (speed is not None or not s["maxSpeed"])):
+                    waits["how"] = "moved" if moved else "stood still" if still else "-"
                     break
+                holding = tuple(k for k, held in (("zone", in_zone), ("move", s["mustMove"] and not (moved or still)),
+                                                  ("speed", speed is None and s["maxSpeed"])) if held)
                 if time.time() - t0 > s["zoneWait"]:
                     why = "stayed in a no-photo zone" if in_any(p["box"], s["noPhotoZones"]) else "never moved"
                     await self.status(f"#{pid} {why}, no line")
@@ -687,7 +699,9 @@ class Voice:
             if p.get("rider") and not now_or_never and time.time() - self.last_spoken < s["cooldown"]:
                 await self.status(f"#{pid} is on a bike but not going fast, and a line just played, no line")
                 return   # (only riders who get the fast line skip the full cooldown)
+            t_crop = time.time()
             image = await asyncio.to_thread(self.crop, p["box"], p.get("frame"))   # may wait briefly for the full-size picture
+            waits["picture"] = time.time() - t_crop
             if image is None:
                 await self.status("No camera picture yet")
                 return
@@ -732,7 +746,9 @@ class Voice:
             entry = {"n": self.line_number, "text": line, "source": source, "cost": cost, "played": False,
                      "time": datetime.datetime.now().strftime("%-I:%M:%S %p"),
                      "seconds": {"photo": round(t_photo - t0, 1), "ready": round(t_ready - t_photo, 1)},
-                     "speed": speed, "photo": photo}
+                     "speed": speed, "photo": photo,
+                     "photo_wait": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in waits.items()
+                                    if not isinstance(v, float) or v >= 0.05}}
             if sound is None:
                 entry["skipped"] = "nobody there"
             elif followup is not None and self.same_person(pid) is None:
@@ -765,7 +781,7 @@ class Voice:
             del self.history[:-50]
             self.save_history()
             what = "played" if entry["played"] else f"not played: {entry['skipped']}"
-            print(f'Voice #{pid}: "{line}" ({source}, {what}, {entry["seconds"]}, ${cost:.4f})')
+            print(f'Voice #{pid}: "{line}" ({source}, {what}, {entry["seconds"]}, photo wait {entry["photo_wait"]}, ${cost:.4f})')
             await self.send({"type": "voice_line", **entry, "today": self.store.today})
         except Exception:
             traceback.print_exc()
