@@ -185,7 +185,7 @@ in the yard.
    ~/eye-speaker/install.sh http://<tracker-computer>.local:8085 <speaker address>
    ```
 
-It starts at boot, reconnects to the speaker whenever it's turned back on, and plays a
+It starts at boot, keeps its log across restarts (`journalctl -u eye-speaker`), reconnects to the speaker whenever it's turned back on, and plays a
 nearly silent sound every few minutes so the speaker doesn't switch itself off. Its status
 shows on the phone page (*Yard speaker: ready (Soundcore 3, 🔋 72%)*), with a *Test yard
 speaker* button. The battery level comes over the speaker's hands-free connection (many
@@ -249,6 +249,9 @@ slow anything down and uses the same single camera connection.
   picture, and more light.
 - **It sticks with one person** until they've been gone 1.5 s, and keeps tracking someone
   it's already following even at low confidence, so it doesn't lose them in the dark.
+- **Camera delay is small.** Run `camera_delay.py` and open its page on a phone: the screen
+  flashes a pattern timed by the Mac's clock, and it measures how late the eye sees it. A Wyze
+  v3 over Wi-Fi measured 0.37 s (its burned-in clock is off by ~10 s, so don't judge by that).
 - **Wyze cameras sometimes ignore the first connection** while their Wi-Fi wakes up; the
   tracker just retries.
 - **Photos come from the full-size picture.** Detection runs on a shrunken 960×540 frame, but
@@ -256,9 +259,11 @@ slow anything down and uses the same single camera connection.
   person-box was measured on (frames are numbered). Cropping from "the newest" one put walkers
   off-centre, since it arrives ~0.3 s later. The crop is padded by the person's height as well
   as their width, so a dog a leash-length ahead of someone seen side-on stays in frame.
-- **Speed of the voice.** With recorded lines, about 2.5 s from someone appearing to the
-  line being ready (0.6 s waiting to see them move, then Claude picking); written live, about
-  3.5–4 s (Claude ~1.5 s, ElevenLabs ~1.2 s). *Sonnet 5.5* is much faster than *Opus 5.5*
+- **Speed of the voice.** With recorded lines, a median of about 3.5 s from the eye seeing
+  someone to the line being ready (a day of real use: ~1.8 s for a good photo, ~1.6 s for
+  Claude picking); written live, about 3.5–4 s after the photo (Claude ~1.5 s, ElevenLabs
+  ~1.2 s). Each line's log entry says what held its photo up (a no-photo zone, waiting for
+  them to move, the speed check, the full-size picture). *Sonnet 5.5* is much faster than *Opus 5.5*
   (Settings → Voice). The line is prepared as soon as someone appears and held until they
   reach a talk zone, or played right away if they already walked through it. Turning
   Claude's thinking off didn't help; caching the list of recorded lines did (and cut the
@@ -279,6 +284,7 @@ slow anything down and uses the same single camera connection.
 | `voice.py` | The voice: photo → Claude → ElevenLabs (or Piper), recorded-line libraries, talk/no-photo zones, characters |
 | `voice/library/` | Each character's pre-recorded lines (the text; the recordings are made locally) |
 | `recorder.py` | A video clip of each visit |
+| `camera_delay.py` | Measures how far the camera lags behind real life (phone page) |
 | `web/index.html` | The eye (canvas, drawn live) |
 | `web/config.js` | Starting values for the eye settings |
 | `web/calibrate.html` | Phone page: live view, areas, settings, recordings, aim |

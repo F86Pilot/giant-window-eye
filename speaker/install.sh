@@ -23,6 +23,13 @@ printf "[Service]\nExecStart=\nExecStart=/usr/bin/bluealsa -S -p a2dp-source -p 
 sudo systemctl daemon-reload
 sudo systemctl restart bluetooth bluealsa
 
+# Keep the log across restarts (Raspberry Pi OS keeps it in memory only), so if the speaker
+# drops out overnight, power-cycling the Pi doesn't erase why. Capped to spare the SD card.
+sudo mkdir -p /etc/systemd/journald.conf.d
+printf "[Journal]\nStorage=persistent\nSystemMaxUse=100M\nMaxRetentionSec=1month\n" \
+  | sudo tee /etc/systemd/journald.conf.d/50-persistent.conf >/dev/null
+sudo systemctl restart systemd-journald
+
 sed -e "s|__EYE_SERVER__|$SERVER|" -e "s|__SPEAKER_MAC__|$MAC|" eye-speaker.service \
   | sudo tee /etc/systemd/system/eye-speaker.service >/dev/null
 sudo systemctl daemon-reload
