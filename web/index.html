@@ -41,7 +41,7 @@
 // ---------------------------------------------------------------------------
 const C = Object.assign({
   irisHue: 22, hueDrift: true, hueFrom: 0, hueTo: 45, hueCycleMinutes: 10,
-  irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
+  sauron: false, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
   eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
   maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
   moods: true, drowsySec: 6,
@@ -55,7 +55,7 @@ const BASE = { ...C };   // config.js values; settings from the phone page go on
 // Settings changed on the phone page. Most take effect on the next frame; ones
 // that change the pre-drawn images (size, position, look) rebuild them, at most
 // a few times a second so dragging a slider stays smooth on the Pi.
-const REDRAW_KEYS = ['eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
+const REDRAW_KEYS = ['sauron', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
 let rebuildTimer = null;
 function applySettings(values) {
   const next = { ...BASE, ...values };
@@ -104,6 +104,7 @@ function resize() {
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(0.7, 'rgba(0,0,0,0.35)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.9)');
+  if (C.sauron) makeSauron();
 }
 
 function makeSclera() {
@@ -246,6 +247,166 @@ function makeIris(h) {
   g.fillRect(0, 0, size, size);
   g.restore();
   return c;
+}
+
+// ---------------------------------------------------------------------------
+// Eye of Sauron style (setting "sauron"): a lidless eye of fire with a slit pupil.
+// The flames are pre-drawn as a short loop of frames that we fade through, so
+// they seem to stream outward without any per-pixel work while running.
+// ---------------------------------------------------------------------------
+const FIRE_FRAMES = 12, FIRE_SIZE = 512, FIRE_SPAN = 1.3;   // the fire pictures reach 1.3 eyeball radii out
+let fireFrames = null, coreTex = null, slitTex = null, slitGlowTex = null;
+
+// Smooth random noise that repeats every px by py cells, so it can wrap around
+// the eye and the flame loop can start over without a jump.
+function tiledNoise(seed, px, py) {
+  const r = seededRandom(seed), grid = new Float32Array(px * py);
+  for (let i = 0; i < grid.length; i++) grid[i] = r(0, 1);
+  const at = (x, y) => grid[((y % py) + py) % py * px + ((x % px) + px) % px];
+  return (x, y) => {
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    let fx = x - x0, fy = y - y0;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+    return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+  };
+}
+
+function makeFireFrames() {
+  // A few layers of noise, each finer and fainter. x = around the eye, y = outward.
+  const AROUND = 14, OUT = 4;
+  const layers = [0, 1, 2, 3].map(o => ({ n: tiledNoise(7 + o * 13, AROUND << o, OUT << o), f: 1 << o, w: 1 / (1 << o) }));
+  const fbm = (x, y) => { let v = 0; for (const L of layers) v += L.n(x * L.f, y * L.f) * L.w; return v / 1.875; };
+  // Ramp from cold to hot: black, ember red, orange, yellow, near white
+  const ramp = [[0, 0, 0, 0], [0.18, 70, 4, 0], [0.38, 180, 32, 0], [0.58, 245, 105, 8], [0.78, 255, 185, 45], [1, 255, 245, 190]];
+  const color = h => {
+    if (h <= 0) return ramp[0];
+    for (let i = 1; i < ramp.length; i++) if (h <= ramp[i][0]) {
+      const a = ramp[i - 1], b = ramp[i], t = (h - a[0]) / (b[0] - a[0]);
+      return [0, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
+    }
+    return ramp[ramp.length - 1];
+  };
+  // Per pixel, the parts that don't change between frames
+  const S = FIRE_SIZE, ang = new Float32Array(S * S), dist = new Float32Array(S * S);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = ((x + 0.5) / S * 2 - 1) * FIRE_SPAN, v = ((y + 0.5) / S * 2 - 1) * FIRE_SPAN;
+    // Almond-shaped distance: 1 at the edge of a wide eye shape with pointed corners
+    const k = u / 0.74, ah = 0.44 * Math.max(0.05, 1 - 0.38 * k * k);
+    dist[y * S + x] = Math.hypot(k, v / ah);
+    ang[y * S + x] = (Math.atan2(v, u) / (2 * Math.PI) + 0.5) * AROUND;
+  }
+  const frames = [];
+  for (let i = 0; i < FIRE_FRAMES; i++) {
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d'), img = g.createImageData(S, S), px = img.data;
+    const shift = i / FIRE_FRAMES * OUT;   // flames move outward one full noise loop per cycle
+    for (let p = 0; p < S * S; p++) {
+      const e = dist[p];
+      const n = fbm(ang[p], e * 1.5 - shift);
+      // hot inside the almond, ragged tongues of flame reaching out past its edge
+      // and dying away into darkness further out
+      const heat = 1.1 - 0.72 * e + (n - 0.5) * (0.6 + 1.3 * Math.min(e, 1.4)) - Math.max(0, e - 1.25) * 0.6;
+      const [, r, gg, b] = color(heat);
+      px[p * 4] = r; px[p * 4 + 1] = gg; px[p * 4 + 2] = b; px[p * 4 + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    frames.push(c);
+  }
+  return frames;
+}
+
+function makeSauron() {
+  if (!fireFrames) fireFrames = makeFireFrames();
+  // The molten core: a white-hot glow with streaks, which moves to follow people
+  const rand = seededRandom(99), cr = irisR * 1.25, size = Math.ceil(cr * 2), m = size / 2;
+  coreTex = document.createElement('canvas');
+  coreTex.width = coreTex.height = size;
+  let g = coreTex.getContext('2d');
+  const grad = g.createRadialGradient(m, m, 0, m, m, cr);
+  grad.addColorStop(0, 'rgba(255,255,235,1)');
+  grad.addColorStop(0.22, 'rgba(255,225,110,0.95)');
+  grad.addColorStop(0.5, 'rgba(255,140,20,0.55)');
+  grad.addColorStop(1, 'rgba(180,30,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  g.lineCap = 'round';
+  g.filter = `blur(${Math.max(1, cr * 0.008)}px)`;
+  for (let i = 0; i < 160; i++) {
+    const a = rand(0, Math.PI * 2), r0 = cr * rand(0.1, 0.25), r1 = cr * rand(0.45, 0.85);
+    g.strokeStyle = rand(0, 1) < 0.4 ? `rgba(110,10,0,${rand(0.1, 0.25)})` : `rgba(255,${rand(120, 200) | 0},${rand(20, 80) | 0},${rand(0.06, 0.2)})`;
+    g.lineWidth = cr * rand(0.01, 0.03);
+    const am = a + rand(-0.12, 0.12), rm = (r0 + r1) / 2;
+    g.beginPath();
+    g.moveTo(m + Math.cos(a) * r0, m + Math.sin(a) * r0);
+    g.quadraticCurveTo(m + Math.cos(am) * rm, m + Math.sin(am) * rm, m + Math.cos(a) * r1, m + Math.sin(a) * r1);
+    g.stroke();
+  }
+  g.filter = 'none';
+  // The slit pupil: a tall black lens, plus a deep orange glow around it that tints
+  // the white-hot core (drawn tall and thin, stretched to fit)
+  if (!slitTex) {
+    const lens = (half, color, blur) => {
+      const c = document.createElement('canvas');
+      c.width = 256; c.height = 1024;
+      const g = c.getContext('2d');
+      g.filter = `blur(${blur}px)`;
+      g.fillStyle = color;
+      g.beginPath();
+      g.moveTo(128, 40);
+      g.quadraticCurveTo(128 + half, 512, 128, 984);
+      g.quadraticCurveTo(128 - half, 512, 128, 40);
+      g.fill();
+      return c;
+    };
+    slitGlowTex = lens(150, 'rgba(255,70,0,0.8)', 20);
+    slitTex = lens(52, '#000', 4);
+  }
+}
+
+// Called from draw() instead of the normal eyeball when the "sauron" setting is on.
+// Eyelids become: closing = the fire dies down to embers and the slit narrows.
+function drawSauron(now, ox, oy, squash, ang, shut) {
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+
+  // Flames: fade between neighboring frames of the loop, breathing a little in size.
+  // Flicker = a few uneven waves added together, so it never repeats visibly.
+  const flicker = 0.92 + 0.05 * Math.sin(now / 97) + 0.03 * Math.sin(now / 41 + 1.3);
+  const live = 1 - 0.8 * shut;
+  const t = now / 1000 * 7;   // about 7 frames of the loop a second
+  const f0 = Math.floor(t) % FIRE_FRAMES, fade = t - Math.floor(t);
+  const breathe = 1 + 0.015 * Math.sin(now / 900) + 0.03 * talkLevel * C.talkPulse;
+  const fs = R * 2 * FIRE_SPAN * breathe, fx = cx - fs / 2 + ox * 0.6, fy = cy - fs / 2 + oy * 0.6;
+  ctx.globalAlpha = live * flicker;
+  ctx.drawImage(fireFrames[f0], fx, fy, fs, fs);
+  ctx.globalAlpha = live * flicker * fade;
+  ctx.drawImage(fireFrames[(f0 + 1) % FIRE_FRAMES], fx, fy, fs, fs);
+
+  // Molten core and slit, squashed as they turn toward the edge like the normal iris
+  ctx.save();
+  ctx.translate(cx + ox, cy + oy);
+  ctx.rotate(ang); ctx.scale(squash, 1); ctx.rotate(-ang);
+  const swell = 1 + 0.08 * talkLevel * C.talkPulse + 0.15 * blink;   // a blink is a flare of fire
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = (0.85 + 0.15 * flicker) * (1 - 0.9 * shut);
+  ctx.drawImage(coreTex, -coreTex.width / 2 * swell, -coreTex.height / 2 * swell, coreTex.width * swell, coreTex.height * swell);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  // Slit width: narrows to focus on someone and when startled, widens with each syllable
+  const sw = R * 0.075 * (C.pupilSize / 0.4) * pupil * (1 + 0.45 * talkLevel * C.talkPulse)
+           * (1 - 0.5 * blink) * (1 - 0.75 * shut);
+  const sh = R * 0.92 * (1 - 0.2 * shut);
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.drawImage(slitGlowTex, -sw * 5, -sh * 0.53, sw * 10, sh * 1.06);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(slitTex, -sw * 5, -sh / 2, sw * 10, sh);
+  ctx.restore();
+
+  ctx.fillStyle = vignette;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------------------
@@ -502,16 +663,25 @@ function draw() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
-  ctx.save();
-  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
-  ctx.drawImage(scleraTex, cx - R, cy - R);
-
   // Iris + pupil, squashed as they turn toward the edge so it looks like a ball
   const jiggle = talking('laugh') ? Math.sin(performance.now() / 45) * R * 0.03 * C.talkJiggle * (0.4 + talkLevel) : 0;
   const ox = look.x * C.maxTravel * R, oy = look.y * C.maxTravel * R + jiggle;
   const d = Math.min(Math.hypot(ox, oy) / R, 0.95);
   const squash = Math.cos(Math.asin(d));
   const ang = Math.atan2(oy, ox);
+  const narrow = talking('whisper') ? 0.32 : 0;   // narrowed, conspiratorial lids while whispering
+
+  if (C.sauron) {
+    // Lidless: how "shut" it would be sets how low the fire burns and how thin the slit gets
+    drawSauron(performance.now(), ox, oy, squash, ang, Math.max(lids.upper, narrow));
+    if (C.showGuide) drawGuide();
+    return;
+  }
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+  ctx.drawImage(scleraTex, cx - R, cy - R);
+
   ctx.save();
   ctx.translate(cx + ox, cy + oy);
   ctx.rotate(ang); ctx.scale(squash, 1); ctx.rotate(-ang);
@@ -543,8 +713,7 @@ function draw() {
 
   // Eyelids: an upper lid that comes down from the top and a lower lid that
   // comes up from the bottom. 0 = lid fully open, 1 = lid at the line where they meet.
-  const narrow = talking('whisper') ? 0.32 : 0;   // narrowed, conspiratorial lids while whispering
-  const upper = Math.max(lids.upper, blink, narrow), lower = Math.max(lids.lower, blink, narrow * 0.6);
+  const upper =Math.max(lids.upper, blink, narrow), lower = Math.max(lids.lower, blink, narrow * 0.6);
   // Lower lid first, so when the eye is shut the upper lid's edge is the single
   // curved "closed eye" line. Lid lines stay inside the eyeball.
   if (upper > 0.001 || lower > 0.001) {
@@ -613,7 +782,7 @@ function updateHud(now) {
     `mood:      ${mood}${manualAim ? ' (phone aiming)' : ''}\n` +
     `look:      ${look.x.toFixed(2)}, ${look.y.toFixed(2)}\n` +
     `last msg:  ${lastMsg ? JSON.stringify(lastMsg) : '-'}\n` +
-    `iris hue:  ${Math.round(currentHue(now))}\n` +
+    `iris hue:  ${C.sauron ? '- (Eye of Sauron)' : Math.round(currentHue(now))}\n` +
     `fps:       ${fps}\n` +
     `keys: D=debug  B=blink  F=fullscreen\n` +
     `      S=sleep  W=startle  R=eye roll  T=double-take`;

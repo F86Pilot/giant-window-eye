@@ -23,6 +23,9 @@ SCHEMA = [
      "min": 0.4, "max": 1.3, "step": 0.01, "help": "1 = eyeball touches the top and bottom of the screen."},
 
     # Look
+    {"key": "sauron", "group": "Look", "label": "Eye of Sauron", "kind": "toggle",
+     "help": "Swaps the eyeball for a lidless eye wreathed in flame, with a slit pupil. "
+             "Turn off to go back to the normal eye. The color, white-of-the-eye and vein settings only change the normal eye."},
     {"key": "irisSize", "group": "Look", "label": "Iris size", "kind": "range", "min": 0.25, "max": 0.6, "step": 0.01},
     {"key": "pupilSize", "group": "Look", "label": "Pupil size", "kind": "range", "min": 0.2, "max": 0.7, "step": 0.01},
     {"key": "scleraBrightness", "group": "Look", "label": "White of the eye brightness", "kind": "range",

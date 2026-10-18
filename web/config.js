@@ -8,6 +8,7 @@
 window.EYE_CONFIG = {
 
   // ---- Look of the eye ----------------------------------------------
+  sauron: false,           // true = Eye of Sauron (fire and a slit pupil) instead of the normal eyeball
   // Iris color: 0=red, 22=orange, 45=gold, 120=green, 200=blue, 280=purple, 360=red again
   hueDrift: true,          // slowly change color over time (false = always irisHue)
   hueFrom: 0,              // drift between this color...
