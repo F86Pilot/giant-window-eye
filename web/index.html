@@ -90,6 +90,9 @@ function resize() {
   H = canvas.height = Math.round(innerHeight * dpr);
   canvas.style.width = innerWidth + 'px';
   canvas.style.height = innerHeight + 'px';
+  // A window with no size (TV off or not connected yet when the page loaded):
+  // nothing to draw. The 'resize' event calls us again once the screen is back.
+  if (!W || !H) { R = 0; return; }
   R = Math.min(W, H) / 2 * C.eyeScale;
   cx = W / 2 + C.eyeShiftX * H;
   cy = H / 2 + C.eyeShiftY * H;
@@ -662,6 +665,7 @@ function draw() {
   // starting from a full clear than from a partly cleared picture.
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
+  if (!R) return;   // no screen size yet (see resize)
 
   // Iris + pupil, squashed as they turn toward the edge so it looks like a ball
   const jiggle = talking('laugh') ? Math.sin(performance.now() / 45) * R * 0.03 * C.talkJiggle * (0.4 + talkLevel) : 0;
@@ -844,6 +848,7 @@ addEventListener('resize', resize);
 // ---------------------------------------------------------------------------
 let prev = performance.now();
 function frame(now) {
+  requestAnimationFrame(frame);   // first, so one bad frame can never stop the eye for good
   const dt = Math.min((now - prev) / 1000, 0.1);
   prev = now;
   updateBlink(now);
@@ -851,7 +856,6 @@ function frame(now) {
   tracking = updateLook(now, dt);
   draw();
   updateHud(now);
-  requestAnimationFrame(frame);
 }
 resize();
 requestAnimationFrame(frame);
