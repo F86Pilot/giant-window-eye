@@ -735,7 +735,9 @@ class Voice:
             if image is None:
                 await self.status("No camera picture yet")
                 return
-            if followup is None and s["arrivalSound"]:
+            # Only for people who moved: false detections (parked cars, bushes) only ever pass by standing
+            # still, and Claude's "nobody there" comes too late to stop the sound.
+            if followup is None and s["arrivalSound"] and waits.get("how") == "moved":
                 asyncio.create_task(self.arrival())   # on its own: never holds up the line
             t_photo = time.time()
             photo = await asyncio.to_thread(self.keep_photo, image, pid)
