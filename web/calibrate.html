@@ -224,6 +224,10 @@
       <option value="zone">At the talk zone</option></select></div>
       <p class="help">At the talk zone: the line waits for them to reach a talk zone (up to 3 seconds), so it plays
         as they pass the speaker. If they already went through one, it plays right away.</p></div>
+    <div class="set"><div class="set-top"><span class="label">Sound when someone's noticed</span>
+      <label class="switch"><input type="checkbox" data-v="arrivalSound"><span></span></label></div>
+      <p class="help">A short cackle or "Ooooh..." on the yard speaker as soon as their photo is taken, while
+        their line is picked. Never holds up the line: if it's still going, the line cuts it off.</p></div>
     <div class="set"><div class="set-top"><span class="label">Writer (Claude model)</span><select data-v="model">
       <option value="claude-sonnet-5-5">Sonnet 5.5 (faster)</option>
       <option value="claude-opus-5-5">Opus 5.5</option></select></div></div>
@@ -609,7 +613,7 @@ function vShowLibrary() {
   if (!vSettings) return;
   const lib = vLibraries[vSettings.character];
   $('vLibInfo').textContent = lib
-    ? `This character has ${lib.lines} recorded lines (+ ${lib.fast} for fast riders). Recorded lines skip the voice step: about 2 seconds faster, and only Claude's small cost (none for random).`
+    ? `This character has ${lib.lines} recorded lines${lib.more ? ` (+ ${lib.more} extra versions)` : ''} (+ ${lib.fast} for fast riders${lib.arrival ? `, ${lib.arrival} arrival sounds` : ''}). Recorded lines skip the voice step: about 2 seconds faster, and only Claude's small cost (none for random).`
     : 'This character has no recorded lines yet, so it always writes live.';
 }
 document.querySelectorAll('[data-v]').forEach(el => el.onchange = () => {

@@ -1,5 +1,5 @@
 {
-  "about": "Pre-written lines for the Witch. Claude picks the one that best fits each passerby's photo; 'fast' lines play at random for bikes and scooters (no photo, no AI). 'when': morning / day / evening / night (left out = any time). 'month': only in that month (1-12). Each line is recorded once (voice.py --record-library witch); edit a line's text and run that again to re-record it.",
+  "about": "Pre-written lines for the Witch. Claude picks the one that best fits each passerby's photo; 'fast' lines play at random for bikes and scooters (no photo, no AI). 'when': morning / day / evening / night (left out = any time). 'month': only in that month (1-12). 'more': extra versions of a line (Claude picks the line, the eye plays whichever version was heard longest ago). 'arrival': short sounds played the moment someone's photo is taken, while their line is picked. Each line is recorded once (voice.py --record-library witch); edit a line's text and run that again to re-record it.",
   "cue": "[raspy old witch voice] ",
   "lines": [
     {"id": "black", "text": "All in black, dearie? [cackles] My cat wants a word with your tailor!"},
@@ -59,7 +59,12 @@
     {"id": "kids", "text": "Hello, little ones! [cackles] Practicing your spookiest faces?"},
     {"id": "school", "text": "Off to school, dearie? [cackles] I hope they're teaching potions this year.", "when": "morning"},
     {"id": "trash", "text": "Taking out the trash, dearie? [cackles] Save me any frog legs?"},
-    {"id": "car", "text": "Unloading the car, dearie? [mischievously] Anything in there for my cauldron?"},
+    {"id": "car", "text": "Unloading the car, dearie? [mischievously] Anything in there for my cauldron?", "more": [
+      "Back from market, dearie? [mischievously] Any eye of newt in those bags?",
+      "So many bags! [cackles] You need a broom. Seats two, terrible legroom.",
+      "Need a hand? [cackles] Oh, right... I'm just an eye.",
+      "Toss me a pumpkin, dearie! [mischievously] I'm absolutely famished.",
+      "Hauling treasure from your carriage? [whispers] I'll be watching which one you drop."]},
     {"id": "mail", "text": "Fetching the mail, dearie? [cackles] My owl delivers faster."},
     {"id": "rake", "text": "Raking leaves, dearie? [cackles] Save some for my cauldron soup!"},
     {"id": "wave", "text": "Waving at me, dearie? [cackles] I'd wave back, but I'm stirring the stew!"},
@@ -69,7 +74,12 @@
     {"id": "jog", "text": "Jogging, dearie? [cackles] Even my broom can't keep up with you!"},
     {"id": "brisk", "text": "Such a brisk march, dearie... [cackles] late for potion class?"},
     {"id": "slow", "text": "Taking your time, dearie? [cackles] The best spells are never rushed."},
-    {"id": "lawn", "text": "Cutting across my lawn, dearie? [cackles] My broom does that too!"},
+    {"id": "lawn", "text": "Cutting across my lawn, dearie? [cackles] My broom does that too!", "more": [
+      "A shortcut through my grass? [whispers] The last one who did that... is still a toad. [cackles]",
+      "Off the path, are we? [mischievously] My lawn remembers every footstep, dearie.",
+      "Tiptoe, tiptoe... [cackles] my grass is ticklish!",
+      "Careful! [gasps] You're trampling my mandrakes. Hope you brought earmuffs, dearie!",
+      "Ooh, a rule-breaker! [cackles] I like you already."]},
     {"id": "pockets", "text": "Hands in your pockets, dearie? [cackles] Hiding some toad warts in there?"},
     {"id": "stare", "text": "Stopping to stare, dearie? [whispers] Careful... I stare back. [cackles]"},
     {"id": "bend", "text": "Dropped something, dearie? [cackles] Not one of my potion ingredients, I hope!"},
@@ -114,5 +124,19 @@
     {"id": "f-fly", "text": "Fly, dearie, fly! [cackles]"},
     {"id": "f-rocket", "text": "Was that a rocket, dearie? [cackles]"},
     {"id": "f-wind", "text": "Riding with the wind, dearie! [cackles] My broom approves."}
+  ],
+  "arrival": [
+    {"id": "a-cackle", "text": "Ha! [cackles]"},
+    {"id": "a-ooh", "text": "Ooooh..."},
+    {"id": "a-wellwell", "text": "Well, well..."},
+    {"id": "a-heh", "text": "Heh heh..."},
+    {"id": "a-who", "text": "Hmm? Who's this?"},
+    {"id": "a-look", "text": "[whispers] Look who it is..."},
+    {"id": "a-aha", "text": "Ah-ha!"},
+    {"id": "a-mmm", "text": "Mmm-hmm..."},
+    {"id": "a-ohmy", "text": "Oh my..."},
+    {"id": "a-company", "text": "[gasps] Company!"},
+    {"id": "a-hee", "text": "Hee hee!"},
+    {"id": "a-what", "text": "What have we here?"}
   ]
 }

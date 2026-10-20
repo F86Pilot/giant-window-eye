@@ -85,6 +85,8 @@ DEFAULTS = {
     "fastLines": True,          # people faster than maxSpeed (bikes, scooters) get a quick random recorded line
     "fastWhen": "now",          # "now" = as soon as they're spotted; "zone" = when they reach a talk zone
                                 # (or right away if they already passed one / don't reach one within FAST_ZONE_WAIT)
+    "arrivalSound": True,       # a short recorded sound (a cackle, "Ooooh...") on the yard speaker when someone's photo
+                                # is taken, while their line is picked (characters with "arrival" sounds in their library)
     "talkZones": [],            # shapes (lists of [x, y], 0-1 in the camera picture): play when feet are inside
     "noPhotoZones": [],         # shapes: don't take the photo while feet are inside
     "zoneWait": 20,             # seconds to wait for a photo, and then for them to reach a talk zone
@@ -240,13 +242,33 @@ class Library:
         self.name, self.cue = name, data.get("cue", "")
         self.lines = {l["id"]: l for l in data["lines"]}
         self.fast = {l["id"]: l for l in data.get("fast", [])}
+        self.arrival = {l["id"]: l for l in data.get("arrival", [])}   # short sounds when someone's noticed
+        # A line's extra versions ("more"), recorded as <id>~2, <id>~3...: Claude picks the line (it only
+        # sees the first version), then whichever version was heard longest ago plays.
+        self.more = {f"{l['id']}~{k}": text for l in data["lines"] for k, text in enumerate(l.get("more", []), 2)}
         self.dir = os.path.join(LIBRARY_DIR, name)
 
     def path(self, lid):
         return os.path.join(self.dir, lid + ".mp3")
 
     def text(self, lid):
-        return self.cue + (self.lines.get(lid) or self.fast[lid])["text"]
+        if lid in self.more:
+            return self.cue + self.more[lid]
+        return self.cue + (self.lines.get(lid) or self.fast.get(lid) or self.arrival[lid])["text"]
+
+    def versions(self, lid):
+        """A line and its recorded extra versions."""
+        return [lid] + [v for v in self.more if v.rsplit("~", 1)[0] == lid and os.path.exists(self.path(v))]
+
+    def last_used(self, lid, used):
+        """When the line was last heard; a line with a version nobody's heard lately counts as fresh."""
+        return min(used.get(v, 0) for v in self.versions(lid))
+
+    def version(self, lid, used):
+        """The version of a line heard longest ago (unheard ones in random order)."""
+        versions = self.versions(lid)
+        random.shuffle(versions)
+        return min(versions, key=lambda v: used.get(v, 0))
 
     def audio(self, lid):
         with open(self.path(lid), "rb") as f:
@@ -262,7 +284,7 @@ class Library:
         fits = [i for i in self.recorded(group)
                 if group[i].get("when") in (None, part_of_day(now.hour))
                 and group[i].get("month") in (None, now.month)]
-        fresh = [i for i in fits if time.time() - used.get(i, 0) > fresh_hours * 3600]
+        fresh = [i for i in fits if time.time() - self.last_used(i, used) > fresh_hours * 3600]
         return fresh if len(fresh) >= (3 if fast else 12) else fits
 
 
@@ -273,7 +295,7 @@ def record_library(name, voice_id, redo=False):
     key = open(ELEVEN_KEY_FILE).read().strip()
     os.makedirs(lib.dir, exist_ok=True)
     made = cost = 0
-    for lid in list(lib.lines) + list(lib.fast):
+    for lid in list(lib.lines) + list(lib.more) + list(lib.fast) + list(lib.arrival):
         if os.path.exists(lib.path(lid)) and not redo:
             continue
         text = lib.text(lid)
@@ -287,7 +309,8 @@ def record_library(name, voice_id, redo=False):
         cost += len(text) / 1000 * ELEVEN_PRICE
         print(f"  recorded {lid}: {text}")
     print(f"{name}: recorded {made} lines (about ${cost:.2f}); "
-          f"{len(lib.recorded(lib.lines))} regular + {len(lib.recorded(lib.fast))} fast lines ready")
+          f"{len(lib.recorded(lib.lines))} regular (+ {len(lib.recorded(lib.more))} extra versions) + "
+          f"{len(lib.recorded(lib.fast))} fast lines + {len(lib.recorded(lib.arrival))} arrival sounds ready")
 
 
 class Store:
@@ -337,7 +360,7 @@ class Store:
         elif key == "lineSource":
             if value not in ("live", "library", "random"):
                 return False
-        elif key == "fastLines":
+        elif key in ("fastLines", "arrivalSound"):
             value = bool(value)
         elif key == "fastWhen":
             if value not in ("now", "zone"):
@@ -398,6 +421,8 @@ class Voice:
         self.talks = {}          # line number (or "preview") -> {"env", "cues"}, for the eye's talking
         self.talked = set()      # lines the eye already acted out
         self.last_spoken = 0.0
+        self.arrival_wavs = {}   # (character, sound id) -> WAV bytes, made once
+        self.recent_arrivals = []   # the last few arrival sounds played, so they don't repeat back to back
         self.line_number = max([h.get("n", 0) for h in self.history] + [0])   # carry on from saved history
 
     # ---- See and write (Claude), speak (Piper) ----
@@ -437,7 +462,8 @@ class Voice:
         import anthropic
         out = io.BytesIO()
         image.save(out, "JPEG", quality=85)
-        recent = [i for i in sorted(self.store.used, key=self.store.used.get)[-10:] if i in ids]
+        heard = {i: lib.last_used(i, self.store.used) for i in ids}
+        recent = sorted((i for i in ids if heard[i]), key=heard.get)[-10:]
         # The list of lines goes in the system prompt and is cached: it only changes when the time of
         # day does, so after the first pick Claude reads it at a tenth of the price, and answers sooner.
         listing = "\n".join(f"{i}: {lib.lines[i]['text']}" for i in ids)
@@ -477,16 +503,20 @@ class Voice:
             name = c.get("library")
             if name and os.path.exists(os.path.join(LIBRARY_DIR, name + ".json")):
                 lib = self.libraries.get(name) or Library(name)
-                info[key] = {"lines": len(lib.recorded(lib.lines)), "fast": len(lib.recorded(lib.fast))}
+                info[key] = {"lines": len(lib.recorded(lib.lines)), "more": len(lib.recorded(lib.more)),
+                             "fast": len(lib.recorded(lib.fast)), "arrival": len(lib.recorded(lib.arrival))}
         return info
 
     def from_library(self, lib, lid):
-        """A recorded line ready to play: (text, (audio, type, cost, voice)), with the character's effect."""
+        """A recorded line ready to play: (text, (audio, type, cost, voice)), with the character's effect.
+        If the line has extra versions, the one heard longest ago."""
+        lid = lib.version(lid, self.store.used)
         audio, kind = lib.audio(lid), "audio/mpeg"
         styled = self.add_effect(audio)
         self.store.used[lid] = time.time()
         self.store.save()
-        return lib.text(lid), (styled or audio, kind, 0.0, f"{self.character()['name']} library")
+        version = f" ({lid})" if "~" in lid else ""   # which extra version, for the log
+        return lib.text(lid), (styled or audio, kind, 0.0, f"{self.character()['name']} library{version}")
 
     def write(self, model, image, context, recent, tags):
         """Returns (line, cost in dollars). Raises on any API problem."""
@@ -705,6 +735,8 @@ class Voice:
             if image is None:
                 await self.status("No camera picture yet")
                 return
+            if followup is None and s["arrivalSound"]:
+                asyncio.create_task(self.arrival())   # on its own: never holds up the line
             t_photo = time.time()
             photo = await asyncio.to_thread(self.keep_photo, image, pid)
             await self.status(f"Making a line for #{pid}...")
@@ -926,6 +958,47 @@ class Voice:
         print(f'Voice #{pid}: "{line}" (fast rider at {speed} heights/s, played, {entry["seconds"]["total"]}s)')
         await self.send({"type": "voice_line", **entry, "today": self.store.today})
         return True
+
+    def arrival_wav(self, lib, aid):
+        """An arrival sound with the character's effect, as WAV: the yard speaker plays WAV without
+        decoding it first, so it starts sooner."""
+        import subprocess
+        key = (self.store.settings["character"], aid)
+        if key not in self.arrival_wavs:
+            # Trim the silence ElevenLabs leaves at both ends, so it's over sooner.
+            trim = "silenceremove=start_periods=1:start_threshold=-45dB"
+            chain = ",".join(c for c in (self.character()["effect"], trim, "areverse", trim, "areverse") if c)
+            r = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-af", chain, "-ac", "1", "-ar", "44100", "-f", "s16le", "pipe:1"],
+                               input=lib.audio(aid), capture_output=True, timeout=10)
+            if r.returncode or not r.stdout:
+                print(f"Voice: arrival sound {aid} failed: {r.stderr.decode(errors='replace')[:200]}")
+                return None
+            out = io.BytesIO()
+            with wave.open(out, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(44100)
+                w.writeframes(r.stdout)
+            self.arrival_wavs[key] = out.getvalue()
+        return self.arrival_wavs[key]
+
+    async def arrival(self):
+        """A short sound (a cackle, "Ooooh...") on the yard speaker when someone's photo is taken, so they
+        hear they've been noticed while their line is picked. If it's still going when the line is ready,
+        the speaker cuts it off rather than making the line wait."""
+        try:
+            lib = self.library()
+            ids = lib.recorded(lib.arrival) if lib else []
+            if not ids:
+                return
+            aid = random.choice([i for i in ids if i not in self.recent_arrivals] or ids)
+            self.recent_arrivals = (self.recent_arrivals + [aid])[-4:]
+            audio = await asyncio.to_thread(self.arrival_wav, lib, aid)
+            if audio:
+                await self.send_speakers({"type": "sound", "id": aid, "kind": "audio/wav",
+                                          "audio": base64.standard_b64encode(audio).decode()})
+        except Exception:
+            traceback.print_exc()
 
     def save_history(self):
         tmp = self.history_path + ".tmp"

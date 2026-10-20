@@ -37,6 +37,7 @@ CHECK_EVERY = 15           # seconds between Bluetooth checks
 last_sound = 0.0
 connected = False
 playing = asyncio.Lock()
+arrival = {"proc": None}   # the arrival sound playing now, if any (a line cuts it off)
 
 
 def log(text):
@@ -78,23 +79,29 @@ def quiet_wav(seconds=1.0, level=0.003):
     return out.getvalue()
 
 
-async def play(audio, kind, on_start=None):
+async def play(audio, kind, on_start=None, cut=False):
     """Play mp3 or wav bytes on the speaker. One at a time. on_start() is awaited just before the
-    sound starts (the eye uses it to move in time with the words)."""
+    sound starts (the eye uses it to move in time with the words). cut: a line, which cuts off an
+    arrival sound that's still playing instead of waiting for it."""
     global last_sound
-    async with playing:
-        with tempfile.TemporaryDirectory() as tmp:
-            wav = os.path.join(tmp, "line.wav")
-            if "mpeg" in kind:
-                # Decode first, so playback is a plain file read (no decoding while Bluetooth streams).
-                mp3 = os.path.join(tmp, "line.mp3")
-                with open(mp3, "wb") as f:
-                    f.write(audio)
-                await asyncio.to_thread(subprocess.run, ["mpg123", "-q", "-w", wav, mp3],
-                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-            else:
-                with open(wav, "wb") as f:
-                    f.write(audio)
+    with tempfile.TemporaryDirectory() as tmp:
+        wav = os.path.join(tmp, "line.wav")
+        if "mpeg" in kind:
+            # Decode first, so playback is a plain file read (no decoding while Bluetooth streams).
+            # Done before waiting our turn, so an arrival sound playing meanwhile doesn't delay it.
+            mp3 = os.path.join(tmp, "line.mp3")
+            with open(mp3, "wb") as f:
+                f.write(audio)
+            await asyncio.to_thread(subprocess.run, ["mpg123", "-q", "-w", wav, mp3],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        else:
+            with open(wav, "wb") as f:
+                f.write(audio)
+        arrival_proc = arrival["proc"]
+        if cut and arrival_proc and arrival_proc.returncode is None:
+            arrival_proc.terminate()
+            log("line ready: cut the arrival sound short")
+        async with playing:
             if on_start:
                 await on_start()
             # A half-second buffer smooths over hiccups on the Pi's shared Wi-Fi/Bluetooth radio.
@@ -116,14 +123,39 @@ async def fetch_and_play(session, path, on_start=None):
             return False
         audio = await r.read()
         kind = r.headers.get("Content-Type", "")
-    ok = await play(audio, kind, on_start)
+    ok = await play(audio, kind, on_start, cut=True)
     log(f"played {path}" if ok else f"couldn't play {path} (is the speaker connected?)")
     return ok
 
 
 async def play_now(audio, kind, n, on_start):
-    ok = await play(audio, kind, on_start)
+    ok = await play(audio, kind, on_start, cut=True)
     log(f"played line {n}" if ok else f"couldn't play line {n} (is the speaker connected?)")
+
+
+async def play_arrival(audio, name):
+    """A short arrival sound (WAV, nothing to decode) as someone's line is being picked. Skipped if
+    something is already playing; a line that's ready meanwhile cuts it off (see play)."""
+    global last_sound
+    if playing.locked():
+        return
+    async with playing:
+        with tempfile.TemporaryDirectory() as tmp:
+            wav = os.path.join(tmp, "arrival.wav")
+            with open(wav, "wb") as f:
+                f.write(audio)
+            proc = arrival["proc"] = await asyncio.create_subprocess_exec(
+                "aplay", "-q", "-D", DEVICE, "--buffer-time=500000", wav,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+            finally:
+                arrival["proc"] = None
+        last_sound = time.time()
+    log(f"arrival sound {name}" + ("" if proc.returncode == 0 else " (stopped or couldn't play)"))
 
 
 async def keep_speaker(send_status):
@@ -182,6 +214,8 @@ async def main():
                                                          msg["n"], started(msg["n"])))
                         elif msg.get("type") == "play":
                             asyncio.create_task(fetch_and_play(session, f"/voice/audio/{msg['n']}", started(msg["n"])))
+                        elif msg.get("type") == "sound" and msg.get("audio"):   # arrival sound
+                            asyncio.create_task(play_arrival(base64.b64decode(msg["audio"]), msg.get("id", "")))
                         elif msg.get("type") == "test":
                             asyncio.create_task(fetch_and_play(session, f"/voice/preview?t={time.time()}",
                                                                started("preview")))
