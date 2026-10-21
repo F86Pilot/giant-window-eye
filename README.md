@@ -107,6 +107,9 @@ Raspberry Pi OS (64-bit, desktop) with auto-login. Copy the `pi/` folder to the 
 ```
 Restart, and the Pi boots straight into the eye, fullscreen, with no mouse pointer.
 It waits for the tracker if it boots first, and restarts the browser if it crashes.
+It also keeps itself on Wi-Fi (`pi/net-setup.sh`: power saving off, plus a watchdog that
+reconnects after 2 minutes offline and restarts the Pi after 10), so a Wi-Fi drop can't leave
+a "password required" box on the screen instead of the eye.
 Plug the TV into the micro-HDMI port next to the power port.
 
 The Pi runs the screen at **720p** on purpose: a Pi 4 draws this eye at ~40 frames per

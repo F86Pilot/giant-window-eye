@@ -1,0 +1,12 @@
+# Keeps the display Pi on Wi-Fi (pi/net-watchdog.sh). Installed by pi/install.sh.
+[Unit]
+Description=Giant Eye display Wi-Fi watchdog
+After=NetworkManager.service
+
+[Service]
+ExecStart=/usr/local/bin/eye-net-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

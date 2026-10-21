@@ -15,4 +15,5 @@ mkdir -p ~/.config/labwc ~/.config/kanshi
 cp labwc-autostart ~/.config/labwc/autostart      # replaces the normal desktop with the eye
 cp kanshi-config ~/.config/kanshi/config           # screen at 720p (smoother on a Pi 4)
 python3 invisible-cursor.py                        # hide the mouse pointer
+sudo ./net-setup.sh                                # stay on Wi-Fi (watchdog), keep the log
 echo "Done. Restart the Pi and it will boot straight into the eye at $URL"
