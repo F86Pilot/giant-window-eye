@@ -678,7 +678,8 @@ function rDraw() {
     li.querySelector('.when').textContent = c.time;
     const what = li.querySelector('.what');
     if (c.stopped) what.insertAdjacentHTML('beforeend', `<span class="stopped">Stopped to look (${c.stoodStill}s)</span> · `);
-    what.append(`${c.seconds}s` + (c.line ? ` · “${c.line}”` : ''));
+    const more = (c.lines || []).length - 1;
+    what.append(`${c.seconds}s` + (c.line ? ` · “${c.line}”` : '') + (more > 0 ? ` (+${more} more)` : ''));
     const play = () => {
       let v = li.querySelector('video');
       if (v) { v.remove(); return; }

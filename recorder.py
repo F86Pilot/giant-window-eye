@@ -145,7 +145,7 @@ class Recorder:
     def line_played(self, audio, kind, text):
         """Called by the voice when a line plays."""
         self.lines.append((time.time(), audio, kind, text))
-        del self.lines[:-20]
+        del self.lines[:-40]   # enough for a long visit with "still here" lines every 15 s
 
     # ---- Watching visits ----
     async def run(self):
@@ -279,16 +279,20 @@ class Recorder:
                         shutil.copyfileobj(piece, j)
             cmd = ["ffmpeg", "-loglevel", "error", "-y", "-i", joined]
             mic = self.has_audio(joined)
-            line = next((x for x in reversed(self.lines) if v["start"] - 1 <= x[0] <= v["seen"] + AFTER), None)
-            if line:
-                ext = ".mp3" if "mpeg" in line[2] else ".wav"
-                sound = os.path.join(tmp, "line" + ext)
-                open(sound, "wb").write(line[1])
-                delay = max(0, int((line[0] - clip_start) * 1000))
-                eye = f"[1:a]adelay={delay}:all=1"
-                mix = (f"{eye}[eye];[0:a][eye]amix=inputs=2:duration=first:normalize=0[out]" if mic
-                       else f"{eye}[out]")
-                cmd += ["-i", sound, "-filter_complex", mix, "-map", "0:v", "-map", "[out]", "-c:v", "copy",
+            # Every line said during the visit (people who stay get "still here" lines), each where it played.
+            lines = [x for x in self.lines if v["start"] - 1 <= x[0] <= v["seen"] + AFTER]
+            if lines:
+                parts = []
+                for i, line in enumerate(lines, 1):
+                    sound = os.path.join(tmp, f"line{i}" + (".mp3" if "mpeg" in line[2] else ".wav"))
+                    open(sound, "wb").write(line[1])
+                    cmd += ["-i", sound]
+                    parts.append(f"[{i}:a]adelay={max(0, int((line[0] - clip_start) * 1000))}:all=1[eye{i}]")
+                ins = ("[0:a]" if mic else "") + "".join(f"[eye{i}]" for i in range(1, len(lines) + 1))
+                n = len(lines) + mic
+                mix = ";".join(parts) + ";" + (f"{ins}amix=inputs={n}:duration={'first' if mic else 'longest'}:normalize=0[out]"
+                                               if n > 1 else f"{ins}anull[out]")
+                cmd += ["-filter_complex", mix, "-map", "0:v", "-map", "[out]", "-c:v", "copy",
                         "-c:a", "aac", "-b:a", "96k"]
             elif mic:
                 cmd += ["-map", "0:v", "-map", "0:a", "-c:v", "copy", "-c:a", "copy"]
@@ -305,7 +309,8 @@ class Recorder:
                        capture_output=True, timeout=30)
         clip = {"file": f"{os.path.basename(day)}/{name}.mp4", "time": when.strftime("%a %b %-d, %-I:%M:%S %p"),
                 "start": v["start"], "seconds": round(length), "stopped": stopped,
-                "stoodStill": round(v["still"], 1), "line": line[3] if line else None, "sound": mic}
+                "stoodStill": round(v["still"], 1), "line": lines[0][3] if lines else None,
+                "lines": [x[3] for x in lines], "sound": mic}
         with open(os.path.join(day, name + ".json"), "w") as f:
             json.dump(clip, f, indent=1)
         self.tidy()
