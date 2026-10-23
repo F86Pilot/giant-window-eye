@@ -71,6 +71,8 @@ STILL_STOP = 20.0         # "still here" lines stop for someone who hasn't shift
 RIDER_SPEED = 1.3         # a person with a bicycle under them, moving faster than this (own heights per second): a rider
 RIDER_LOOK = 1.5          # ...so wait this long before photographing someone on a bike, to see how fast they go
 STILL_OK = 3.0            # "only people who move": someone standing still this long counts too (people stop to look)
+REID_GAP = 2.0            # someone who vanished (behind the tree) and comes back under a new ID within this many seconds...
+REID_DIST = 3.0           # ...this many of their own heights from where they were last seen is the same person
 
 DEFAULTS = {
     "enabled": True,
@@ -652,6 +654,13 @@ class Voice:
         p = self.read_person()
         return p if p["present"] and p["id"] == pid and p["box"] else None
 
+    def near(self, p, seen):
+        """Is p's box within REID_DIST of their own heights of seen = (when, feet x, feet y, height)?"""
+        fx, fy = feet(p["box"])
+        aspect = p.get("aspect") or 16 / 9
+        height = max(seen[3], p["box"][3] - p["box"][1])
+        return height > 0 and (((fx - seen[1]) * aspect) ** 2 + (fy - seen[2]) ** 2) ** 0.5 <= REID_DIST * height
+
     async def comment(self, pid, manual=False, followup=None):
         """Photo -> line -> wait for the talk zone -> play. One at a time.
         followup = {"since", "n", "lines", "here"}: they're still here after their line(s); say something new."""
@@ -673,17 +682,31 @@ class Voice:
             rider_tried = False
             # What held up the photo, in seconds (checks can overlap), for the log: no-photo zone, not moved
             # yet, too soon to judge speed, watching a bike rider, then waiting for the full-size picture.
-            waits = {"settle": round(time.time() - t0, 2), "zone": 0.0, "move": 0.0, "speed": 0.0, "bike": 0.0}
+            waits = {"settle": round(time.time() - t0, 2), "zone": 0.0, "move": 0.0, "speed": 0.0, "bike": 0.0,
+                     "lost": 0.0}
             holding, tick = (), time.time()
+            seen = None   # (when, feet x, feet y, height) they were last seen, to know them again under a new ID
             while True:
                 for k in holding:
                     waits[k] += time.time() - tick
                 holding, tick = (), time.time()
                 p = self.same_person(pid)
+                if p is None and not manual and seen and time.time() - seen[0] < REID_GAP:
+                    # The tracker lost them for a moment and may hand them a new ID: carry on with the new
+                    # one rather than starting over (which held lines up by seconds).
+                    q = self.read_person()
+                    if not (q["present"] and q["box"]):
+                        holding = ("lost",)
+                        await asyncio.sleep(0.1)
+                        continue
+                    if self.near(q, seen):
+                        print(f"Voice: #{pid} is now #{q['id']}, carrying on")
+                        pid, p = q["id"], q
                 if p is None:
                     if manual:
                         await self.status("Nobody in view right now")
                     return
+                seen = (time.time(), *feet(p["box"]), p["box"][3] - p["box"][1])
                 if in_any(p["box"], s["talkZones"]):
                     reached["talk"] = True
                 fx, fy = feet(p["box"])
@@ -870,7 +893,7 @@ class Voice:
                     want = pid
                 # The tracker sometimes hands someone a new ID number while the voice is still working on
                 # their old one; keep trying for the current person until it can start (or they leave).
-                if want is not None and want != pid:
+                if want is not None and (want != pid or want in self.spoken_to):   # (a line carried on under their new ID)
                     want = None
                 elif want is not None and self.should_talk(
                         cooldown=self.store.settings["fastCooldown"] if p.get("rider") else None):
