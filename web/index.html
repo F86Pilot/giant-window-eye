@@ -41,7 +41,7 @@
 // ---------------------------------------------------------------------------
 const C = Object.assign({
   irisHue: 22, hueDrift: true, hueFrom: 0, hueTo: 45, hueCycleMinutes: 10,
-  sauron: false, turkey: false, turkeyWalk: 0.2, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
+  character: 'eye', turkeyWalk: 0.2, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
   eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
   maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
   moods: true, drowsySec: 6,
@@ -55,7 +55,7 @@ const BASE = { ...C };   // config.js values; settings from the phone page go on
 // Settings changed on the phone page. Most take effect on the next frame; ones
 // that change the pre-drawn images (size, position, look) rebuild them, at most
 // a few times a second so dragging a slider stays smooth on the Pi.
-const REDRAW_KEYS = ['sauron', 'turkey', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
+const REDRAW_KEYS = ['character', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
 let rebuildTimer = null;
 function applySettings(values) {
   const next = { ...BASE, ...values };
@@ -107,8 +107,8 @@ function resize() {
   vignette.addColorStop(0, 'rgba(0,0,0,0)');
   vignette.addColorStop(0.7, 'rgba(0,0,0,0.35)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.9)');
-  if (C.sauron) makeSauron();
-  if (C.turkey) makeTurkey();
+  if (C.character === 'sauron') makeSauron();
+  if (C.character === 'turkey') makeTurkey();
 }
 
 function makeSclera() {
@@ -254,7 +254,7 @@ function makeIris(h) {
 }
 
 // ---------------------------------------------------------------------------
-// Eye of Sauron style (setting "sauron"): a lidless eye of fire with a slit pupil.
+// Eye of Sauron style (character "sauron"): a lidless eye of fire with a slit pupil.
 // The flames are pre-drawn as a short loop of frames that we fade through, so
 // they seem to stream outward without any per-pixel work while running.
 // ---------------------------------------------------------------------------
@@ -369,7 +369,7 @@ function makeSauron() {
   }
 }
 
-// Called from draw() instead of the normal eyeball when the "sauron" setting is on.
+// Called from draw() instead of the normal eyeball when the character is "sauron".
 // Eyelids become: closing = the fire dies down to embers and the slit narrows.
 function drawSauron(now, ox, oy, squash, ang, shut) {
   ctx.save();
@@ -414,7 +414,7 @@ function drawSauron(now, ox, oy, squash, ang, shut) {
 }
 
 // ---------------------------------------------------------------------------
-// Turkey style (setting "turkey"): a round, cartoony turkey standing in the window.
+// Turkey style (character "turkey"): a round, cartoony turkey standing in the window.
 // It watches people with big eyes, walks along beside them, fans its tail when
 // someone shows up, wanders and pecks when nobody's there, and works its beak
 // when the voice talks. Body, feathers and wings are pre-drawn once.
@@ -1014,12 +1014,12 @@ function draw() {
   const ang = Math.atan2(oy, ox);
   const narrow = talking('whisper') ? 0.32 : 0;   // narrowed, conspiratorial lids while whispering
 
-  if (C.turkey && tkBodyTex) {   // (just switched on: the eye shows until the turkey is drawn)
+  if (C.character === 'turkey' && tkBodyTex) {   // (just switched on: the eye shows until the turkey is drawn)
     drawTurkey(performance.now(), narrow);
     if (C.showGuide) drawGuide();
     return;
   }
-  if (C.sauron) {
+  if (C.character === 'sauron' && fireFrames) {
     // Lidless: how "shut" it would be sets how low the fire burns and how thin the slit gets
     drawSauron(performance.now(), ox, oy, squash, ang, Math.max(lids.upper, narrow));
     if (C.showGuide) drawGuide();
@@ -1130,7 +1130,7 @@ function updateHud(now) {
     `mood:      ${mood}${manualAim ? ' (phone aiming)' : ''}\n` +
     `look:      ${look.x.toFixed(2)}, ${look.y.toFixed(2)}\n` +
     `last msg:  ${lastMsg ? JSON.stringify(lastMsg) : '-'}\n` +
-    `iris hue:  ${C.turkey ? `- (turkey at ${tk.x.toFixed(2)})` : C.sauron ? '- (Eye of Sauron)' : Math.round(currentHue(now))}\n` +
+    `iris hue:  ${C.character === 'turkey' ? `- (turkey at ${tk.x.toFixed(2)})` : C.character === 'sauron' ? '- (Eye of Sauron)' : Math.round(currentHue(now))}\n` +
     `fps:       ${fps}\n` +
     `keys: D=debug  B=blink  F=fullscreen\n` +
     `      S=sleep  W=startle  R=eye roll  T=double-take`;
@@ -1166,7 +1166,7 @@ const talking = cue => talk && talk.cues.includes(cue) && performance.now() >= t
 // Trigger a reaction on demand (test buttons, phone page, or keyboard).
 function react(action) {
   const now = performance.now();
-  if (action === 'sleep' && !C.turkey) fallAsleep(now, 20);   // the turkey never naps
+  if (action === 'sleep' && C.character !== 'turkey') fallAsleep(now, 20);   // the turkey never naps
   if (action === 'startle') startle(now);
   if (action === 'roll') startEyeRoll(now);
   if (action === 'doubletake') startDoubleTake(now);
@@ -1198,7 +1198,7 @@ function frame(now) {
   updateBlink(now);
   updateTalk(now, dt);
   tracking = updateLook(now, dt);
-  if (C.turkey) updateTurkey(now, dt, tracking);
+  if (C.character === 'turkey') updateTurkey(now, dt, tracking);
   draw();
   updateHud(now);
 }

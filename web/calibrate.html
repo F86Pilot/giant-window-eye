@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>Giant Eye Controls</title>
+<title>Window Controls</title>
 <style>
   :root { --bg: #111; --panel: #1c1c1c; --text: #eee; --dim: #999; --accent: #ff8a3d; --ok: #5c5; --bad: #e66;
           --z-ignore: #aaa; --z-talk: #ff8a3d; --z-nophoto: #59f; --z-record: #5c5; }
@@ -100,7 +100,13 @@
   .switch input:checked + span::before { transform: translateX(24px); }
   .section { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 22px 0 8px; }
   .section:first-child { margin-top: 0; }
-  details .inner { padding: 0 14px 12px; }
+  details .inner, .panel-flat .inner { padding: 0 14px 12px; }
+  .panel-flat { background: var(--panel); border-radius: 10px; margin-bottom: 10px; }
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; margin: 4px 0 6px; }
+  .choices button { margin: 0; padding: 14px 6px; font-size: 15px; font-weight: 600; line-height: 1.25; }
+  .choices button .em { display: block; font-size: 30px; margin-bottom: 4px; }
+  .choices button.on { background: var(--accent); color: #000; }
+  [hidden] { display: none !important; }
 
   /* recordings */
   .rfilter { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -119,7 +125,7 @@
 <script src="config.js?v=3"></script>
 </head>
 <body>
-<h1>Giant Eye controls</h1>
+<h1>Window controls</h1>
 <div class="status" id="status">Connecting…</div>
 
 <div class="tabs">
@@ -143,12 +149,12 @@
   <button id="vUnlock">Also play lines on this phone</button>
   <p class="help" id="vToday"></p>
 
-  <h2>Make the eye react</h2>
+  <h2>Make it react</h2>
   <div class="grid2 react">
     <button data-react="doubletake">👀 Double-take</button>
     <button data-react="roll">🙄 Eye roll</button>
     <button data-react="startle">😱 Startle</button>
-    <button data-react="sleep">😴 Sleep</button>
+    <button data-react="sleep" data-only="eye sauron">😴 Sleep</button>
     <button data-react="blink">Blink</button>
   </div>
 
@@ -204,13 +210,20 @@
 <div class="tab" id="tab-settings">
   <p class="help">Changes take effect right away and are saved.</p>
 
-  <div class="section">Eye</div>
+  <div class="section">Character</div>
+  <div class="panel-flat">
+    <div id="lookPicker">Loading…</div>
+    <div class="set"><div class="set-top"><span class="label">Voice</span><select data-v="character"></select></div>
+      <p class="help">Who does the talking. Any voice works with any character.</p></div>
+    <div class="inner"><button id="vPreview">▶ Preview voice</button></div>
+  </div>
+
+  <div class="section">Look &amp; movement</div>
   <div id="eyeSettings">Loading…</div>
 
   <div class="section">Voice</div>
-  <details open>
-    <summary>Character</summary>
-    <div class="set"><div class="set-top"><span class="label">Character</span><select data-v="character"></select></div></div>
+  <details>
+    <summary>Lines</summary>
     <div class="set"><div class="set-top"><span class="label">Lines</span><select data-v="lineSource">
       <option value="library">Recorded: Claude picks (fast)</option>
       <option value="live">Written live (slowest)</option>
@@ -231,7 +244,6 @@
     <div class="set"><div class="set-top"><span class="label">Writer (Claude model)</span><select data-v="model">
       <option value="claude-sonnet-5-5">Sonnet 5.5 (faster)</option>
       <option value="claude-opus-5-5">Opus 5.5</option></select></div></div>
-    <div class="inner"><button id="vPreview">▶ Preview character</button></div>
   </details>
   <details>
     <summary>When to talk</summary>
@@ -623,19 +635,19 @@ document.querySelectorAll('[data-v]').forEach(el => el.onchange = () => {
 });
 $('vSay').onclick = () => send({ type: 'voice_say' });
 $('vSpeakerTest').onclick = () => { send({ type: 'voice_speaker_test' }); toast('Test sound sent to the yard speaker', true); };
-// Plays a sample line in the current character's voice, on this phone.
+// Plays a sample line in the current voice, on this phone.
 $('vPreview').onclick = async () => {
   $('vPreview').textContent = 'Loading…';
   $('vPreview').disabled = true;
   if (navigator.audioSession) navigator.audioSession.type = 'playback';
   player.src = '/voice/preview?t=' + Date.now();
   try { await player.play(); } catch (e) { toast('Preview failed: ' + e.message, false); }
-  $('vPreview').textContent = '▶ Preview character';
+  $('vPreview').textContent = '▶ Preview voice';
   $('vPreview').disabled = false;
 };
 document.querySelector('.react').onclick = e => {
   const b = e.target.closest('button');
-  if (b) { send({ type: 'react', action: b.dataset.react }); toast(b.textContent + ' sent to the eye', true); }
+  if (b) { send({ type: 'react', action: b.dataset.react }); toast(b.textContent + ' sent', true); }
 };
 
 // ---- Recordings ---------------------------------------------------------------------
@@ -757,10 +769,13 @@ $('saveBtn').onclick = () => send({ type: 'save' });
 $('clearBtn').onclick = () => { if (confirm('Delete all saved spots and start over?')) send({ type: 'clear' }); };
 $('spots').onclick = e => { const i = e.target.dataset.i; if (i !== undefined) send({ type: 'delete', index: +i }); };
 
-// ---- Eye settings (built from the list the server sends) -------------------------------
-// The "Detection" group goes on the Areas tab (it decides what counts as a person);
-// everything else is under Settings → Eye. Anything not changed shows its default from config.js.
+// ---- Character + look settings (built from the list the server sends) -----------------
+// "Character" (who's in the window) is the picker at the top of Settings. The "Detection"
+// group goes on the Areas tab (it decides what counts as a person); everything else is
+// under Settings → Look & movement, showing only what applies to the chosen character.
+// Anything not changed shows its default from config.js.
 const DEFAULTS = window.EYE_CONFIG || {};
+const CHARACTER_EMOJI = { eye: '👁️', sauron: '🔥', turkey: '🦃' };
 let schema = null, overrides = {}, dragging = null;
 const sendTimers = {};
 const decimals = step => (String(step).split('.')[1] || '').length;
@@ -770,15 +785,19 @@ function showSettings(m) {
   overrides = m.values;
   if (m.schema && !schema) { schema = m.schema; buildSettings(); }
   if (schema) for (const spec of schema) updateRow(spec);
+  showForCharacter();
 }
 function buildSettings() {
   $('eyeSettings').innerHTML = '';
   $('areaSettings').innerHTML = '';
+  $('lookPicker').innerHTML = '';
   const groups = {};
   for (const spec of schema) {
-    const onAreas = spec.group === 'Detection';
+    const onAreas = spec.group === 'Detection', isPicker = spec.group === 'Character';
     if (!groups[spec.group]) {
-      if (onAreas) {
+      if (isPicker) {
+        groups[spec.group] = $('lookPicker');
+      } else if (onAreas) {
         groups[spec.group] = document.createElement('div');
         groups[spec.group].style.cssText = 'background:var(--panel);border-radius:10px;margin-bottom:10px';
         $('areaSettings').appendChild(groups[spec.group]);
@@ -791,9 +810,18 @@ function buildSettings() {
     }
     const row = document.createElement('div');
     row.className = 'set';
-    if (onAreas) row.style.borderTop = '0';
+    if (onAreas || isPicker) row.style.borderTop = '0';
     row.dataset.key = spec.key;
-    if (spec.kind === 'toggle') {
+    if (spec.only) row.dataset.only = spec.only.join(' ');
+    if (spec.kind === 'choice') {
+      row.innerHTML = `<div class="set-top"><span class="label">${spec.label}</span></div>
+        <div class="choices">${spec.options.map(([v, label]) =>
+          `<button data-value="${v}"><span class="em">${CHARACTER_EMOJI[v] || ''}</span>${label}</button>`).join('')}</div>`;
+      row.querySelector('.choices').onclick = e => {
+        const b = e.target.closest('button');
+        if (b) send({ type: 'setting', key: spec.key, value: b.dataset.value });
+      };
+    } else if (spec.kind === 'toggle') {
       row.innerHTML = `<div class="set-top"><span class="label">${spec.label}</span>
         <button class="reset">Reset</button>
         <label class="switch"><input type="checkbox"><span></span></label></div>`;
@@ -811,7 +839,8 @@ function buildSettings() {
       holdToRepeat(minus, () => nudge(spec, row, -1));
       holdToRepeat(plus, () => nudge(spec, row, 1));
     }
-    row.querySelector('.reset').onclick = () => send({ type: 'setting', key: spec.key, value: null });
+    const reset = row.querySelector('.reset');
+    if (reset) reset.onclick = () => send({ type: 'setting', key: spec.key, value: null });
     if (spec.help) row.insertAdjacentHTML('beforeend', `<p class="help">${spec.help}</p>`);
     groups[spec.group].appendChild(row);
   }
@@ -819,12 +848,25 @@ function buildSettings() {
 function updateRow(spec) {
   const row = document.querySelector(`.set[data-key="${spec.key}"]`);
   if (!row) return;
-  row.querySelector('.reset').classList.toggle('hidden', !(spec.key in overrides));
   const v = valueOf(spec.key);
+  if (spec.kind === 'choice') {
+    row.querySelectorAll('.choices button').forEach(b => b.classList.toggle('on', b.dataset.value === (v || spec.options[0][0])));
+    return;
+  }
+  row.querySelector('.reset').classList.toggle('hidden', !(spec.key in overrides));
   if (spec.kind === 'toggle') { row.querySelector('input').checked = !!v; return; }
   if (dragging === spec.key) return;   // don't fight the finger
   row.querySelector('input[type=range]').value = v;
   showVal(spec, row, v);
+}
+// Hide settings (and react buttons) that don't apply to the character in the window,
+// and whole groups that end up empty.
+function showForCharacter() {
+  const ch = valueOf('character') || 'eye';
+  document.querySelectorAll('[data-only]').forEach(el => { el.hidden = !el.dataset.only.split(' ').includes(ch); });
+  document.querySelectorAll('#eyeSettings details').forEach(d => {
+    d.hidden = ![...d.querySelectorAll('.set')].some(row => !row.hidden);
+  });
 }
 function showVal(spec, row, v) { row.querySelector('.val').textContent = Number(v).toFixed(decimals(spec.step)); }
 function nudge(spec, row, dir) {

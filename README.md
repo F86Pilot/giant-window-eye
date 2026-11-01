@@ -213,9 +213,12 @@ Open `http://<tracker-computer-ip>:8085/calibrate`:
     where people are too small for a good joke).
   - **Recording** (green): a clip is only saved if they entered one (leave out the road).
   - *Detection sensitivity*: how sure the camera must be that something is a person.
-- **Settings:** the eye (position and size, with an alignment guide; look; color; movement;
-  blinking; moods; how it moves while talking), the voice (character, Claude model, when to
-  talk, cost limit) and recordings. Changes take effect instantly and are saved.
+- **Settings:** who's in the window (the giant eye, the Eye of Sauron, or a cartoon turkey
+  that watches people, walks along beside them and fans its tail) and which voice talks; then
+  look and movement (position and size, with an alignment guide; look; color; movement;
+  blinking; moods; how it moves while talking), showing only what applies to the chosen
+  character; the voice (lines, Claude model, when to talk, cost limit) and recordings.
+  Changes take effect instantly and are saved.
 - **Recordings:** watch, save or delete clips; filter to people who *stopped to look*.
 - **Aim:** stand in the yard, drag the eye until it looks right at you, and tap
   *Save this spot*. Do 4–6 spots (left, right, near, far). The camera usually isn't where

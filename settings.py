@@ -10,51 +10,53 @@ checked against its min/max here, so a bad value can never reach the eye.
 import json
 import os
 
-# kind "range": a slider. kind "toggle": an on/off switch.
+# Who's in the window. Each setting can say which characters it applies to
+# ("only"); the phone page hides it for the others. No "only" = all of them.
+CHARACTERS = [["eye", "Giant eye"], ["sauron", "Eye of Sauron"], ["turkey", "Turkey"]]
+EYES = ["eye", "sauron"]
+
+# kind "range": a slider. kind "toggle": an on/off switch. kind "choice": one of "options".
 SCHEMA = [
+    {"key": "character", "group": "Character", "label": "In the window", "kind": "choice", "options": CHARACTERS},
+
     # Position & size
     {"key": "showGuide", "group": "Position & size", "label": "Show alignment guide", "kind": "toggle",
-     "help": "Draws a ring around the eyeball's edge and a cross at its center, to line it up with the window. Turn off when done."},
+     "help": "Draws a ring around the circle the character fits in and a cross at its center, to line it up with the window. Turn off when done."},
     {"key": "eyeShiftX", "group": "Position & size", "label": "Move left / right", "kind": "range",
      "min": -0.6, "max": 0.6, "step": 0.005, "help": "Negative = left, positive = right."},
     {"key": "eyeShiftY", "group": "Position & size", "label": "Move up / down", "kind": "range",
      "min": -0.3, "max": 0.3, "step": 0.005, "help": "Negative = up, positive = down."},
-    {"key": "eyeScale", "group": "Position & size", "label": "Eye size", "kind": "range",
-     "min": 0.4, "max": 1.3, "step": 0.01, "help": "1 = eyeball touches the top and bottom of the screen."},
+    {"key": "eyeScale", "group": "Position & size", "label": "Size", "kind": "range",
+     "min": 0.4, "max": 1.3, "step": 0.01, "help": "1 = the circle touches the top and bottom of the screen."},
 
     # Look
-    {"key": "sauron", "group": "Look", "label": "Eye of Sauron", "kind": "toggle",
-     "help": "Swaps the eyeball for a lidless eye wreathed in flame, with a slit pupil. "
-             "Turn off to go back to the normal eye. The color, white-of-the-eye and vein settings only change the normal eye."},
-    {"key": "turkey", "group": "Look", "label": "Turkey", "kind": "toggle",
-     "help": "Swaps the eye for a whole turkey that watches people, walks along beside them, "
-             "fans its tail when someone shows up, and pecks around when nobody's there. "
-             "Wins over Eye of Sauron if both are on. Size and position use the Position & size settings."},
-    {"key": "turkeyWalk", "group": "Look", "label": "Turkey: how far it walks", "kind": "range",
+    {"key": "turkeyWalk", "group": "Look", "label": "How far it walks", "kind": "range", "only": ["turkey"],
      "min": 0, "max": 0.35, "step": 0.01, "help": "How far left and right of center it may wander. 0 = stays put."},
-    {"key": "irisSize", "group": "Look", "label": "Iris size", "kind": "range", "min": 0.25, "max": 0.6, "step": 0.01},
-    {"key": "pupilSize", "group": "Look", "label": "Pupil size", "kind": "range", "min": 0.2, "max": 0.7, "step": 0.01},
-    {"key": "scleraBrightness", "group": "Look", "label": "White of the eye brightness", "kind": "range",
+    {"key": "irisSize", "group": "Look", "label": "Iris size", "kind": "range", "only": EYES,
+     "min": 0.25, "max": 0.6, "step": 0.01},
+    {"key": "pupilSize", "group": "Look", "label": "Pupil size", "kind": "range", "only": EYES,
+     "min": 0.2, "max": 0.7, "step": 0.01},
+    {"key": "scleraBrightness", "group": "Look", "label": "White of the eye brightness", "kind": "range", "only": ["eye"],
      "min": 0, "max": 1, "step": 0.01, "help": "Lower = darker, more mysterious; the glowing iris stands out more."},
-    {"key": "veins", "group": "Look", "label": "Red veins", "kind": "toggle"},
+    {"key": "veins", "group": "Look", "label": "Red veins", "kind": "toggle", "only": ["eye"]},
 
     # Color
-    {"key": "hueDrift", "group": "Color", "label": "Slowly change color", "kind": "toggle"},
-    {"key": "hueFrom", "group": "Color", "label": "Color range: from", "kind": "range", "min": 0, "max": 360, "step": 1,
+    {"key": "hueDrift", "group": "Eye color", "only": ["eye"], "label": "Slowly change color", "kind": "toggle"},
+    {"key": "hueFrom", "group": "Eye color", "only": ["eye"], "label": "Color range: from", "kind": "range", "min": 0, "max": 360, "step": 1,
      "help": "0 red, 22 orange, 45 gold, 120 green, 200 blue, 280 purple, 360 red."},
-    {"key": "hueTo", "group": "Color", "label": "Color range: to", "kind": "range", "min": 0, "max": 360, "step": 1},
-    {"key": "hueCycleMinutes", "group": "Color", "label": "Minutes per color cycle", "kind": "range",
+    {"key": "hueTo", "group": "Eye color", "only": ["eye"], "label": "Color range: to", "kind": "range", "min": 0, "max": 360, "step": 1},
+    {"key": "hueCycleMinutes", "group": "Eye color", "only": ["eye"], "label": "Minutes per color cycle", "kind": "range",
      "min": 1, "max": 60, "step": 1, "help": "Time to go from one end of the range to the other and back."},
-    {"key": "irisHue", "group": "Color", "label": "Fixed color (when not changing)", "kind": "range",
+    {"key": "irisHue", "group": "Eye color", "only": ["eye"], "label": "Fixed color (when not changing)", "kind": "range",
      "min": 0, "max": 360, "step": 1},
 
     # Movement
-    {"key": "maxTravel", "group": "Movement", "label": "How far the iris can move", "kind": "range",
+    {"key": "maxTravel", "group": "Movement", "only": EYES, "label": "How far the eye can look", "kind": "range",
      "min": 0.2, "max": 0.6, "step": 0.01},
     {"key": "smoothing", "group": "Movement", "label": "Follow speed", "kind": "range", "min": 1, "max": 15, "step": 0.5,
      "help": "Higher = snappier when following a person."},
     {"key": "idleAfterSec", "group": "Movement", "label": "Seconds before looking around", "kind": "range",
-     "min": 0.5, "max": 10, "step": 0.5, "help": "After nobody is seen this long, it starts glancing around."},
+     "min": 0.5, "max": 10, "step": 0.5, "help": "After nobody is seen this long, it starts looking around (the turkey also wanders and pecks)."},
     {"key": "idleUpMost", "group": "Movement", "label": "Idle: how far up it glances", "kind": "range",
      "min": 0, "max": 0.8, "step": 0.01},
     {"key": "idleDownMost", "group": "Movement", "label": "Idle: how far down it glances", "kind": "range",
@@ -76,18 +78,18 @@ SCHEMA = [
 
     # Talking (when the voice says a line)
     {"key": "talkAnim", "group": "Talking", "label": "Move while talking", "kind": "toggle",
-     "help": "The pupil and iris pulse with the words. Cues add reactions: whispers narrow the eye, "
-             "laughs make it jiggle, sarcastic lines end in an eye roll."},
+     "help": "Moves with the words: the eye's pupil and iris pulse, the turkey's beak opens and closes. "
+             "Cues add reactions: whispers narrow the eyes, laughs make it jiggle, sarcastic lines end in an eye roll."},
     {"key": "talkDelay", "group": "Talking", "label": "Sync delay (seconds)", "kind": "range",
      "min": 0, "max": 1.5, "step": 0.05,
-     "help": "If the eye moves before you hear the words, raise this; if after, lower it. "
-             "Use \"Test yard speaker\" on the Voice tab to check."},
+     "help": "If it moves before you hear the words, raise this; if after, lower it. "
+             "Use \"Test yard speaker\" on the Live tab to check."},
     {"key": "talkPulse", "group": "Talking", "label": "Pulse strength", "kind": "range",
      "min": 0, "max": 1, "step": 0.05,
-     "help": "How much the pupil (black center) and iris grow with each syllable."},
+     "help": "How strongly it moves with each syllable (the eye's pupil and iris, the turkey's beak)."},
     {"key": "talkJiggle", "group": "Talking", "label": "Laugh jiggle", "kind": "range",
      "min": 0, "max": 1, "step": 0.05,
-     "help": "How much the eye shakes up and down on lines with a laugh or cackle. 0 = no shaking."},
+     "help": "How much it shakes on lines with a laugh or cackle. 0 = no shaking."},
 
     # Detection (used by tracker.py, not the eye page)
     {"key": "detectConfidence", "group": "Detection", "label": "Detection sensitivity", "kind": "range",
@@ -105,7 +107,11 @@ class Settings:
         self.values = {}
         try:
             with open(path) as f:
-                self.values = {k: v for k, v in json.load(f).items() if k in BY_KEY}
+                saved = json.load(f)
+            # Before "character", Eye of Sauron was its own on/off setting
+            if saved.pop("sauron", False) and "character" not in saved:
+                saved["character"] = "sauron"
+            self.values = {k: v for k, v in saved.items() if k in BY_KEY}
             print(f"Loaded {len(self.values)} saved settings")
         except FileNotFoundError:
             pass
@@ -119,6 +125,10 @@ class Settings:
             return False
         if value is None:
             self.values.pop(key, None)
+        elif spec["kind"] == "choice":
+            if value not in [o[0] for o in spec["options"]]:
+                return False
+            self.values[key] = value
         elif spec["kind"] == "toggle":
             self.values[key] = bool(value)
         else:
