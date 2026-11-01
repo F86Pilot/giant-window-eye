@@ -9,6 +9,8 @@ window.EYE_CONFIG = {
 
   // ---- Look of the eye ----------------------------------------------
   sauron: false,           // true = Eye of Sauron (fire and a slit pupil) instead of the normal eyeball
+  turkey: false,           // true = a whole turkey that watches and walks around, instead of the eye
+  turkeyWalk: 0.2,         // how far the turkey may walk left/right of center (0 = stays put, 0.35 = most)
   // Iris color: 0=red, 22=orange, 45=gold, 120=green, 200=blue, 280=purple, 360=red again
   hueDrift: true,          // slowly change color over time (false = always irisHue)
   hueFrom: 0,              // drift between this color...

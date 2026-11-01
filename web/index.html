@@ -41,7 +41,7 @@
 // ---------------------------------------------------------------------------
 const C = Object.assign({
   irisHue: 22, hueDrift: true, hueFrom: 0, hueTo: 45, hueCycleMinutes: 10,
-  sauron: false, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
+  sauron: false, turkey: false, turkeyWalk: 0.2, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
   eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
   maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
   moods: true, drowsySec: 6,
@@ -55,7 +55,7 @@ const BASE = { ...C };   // config.js values; settings from the phone page go on
 // Settings changed on the phone page. Most take effect on the next frame; ones
 // that change the pre-drawn images (size, position, look) rebuild them, at most
 // a few times a second so dragging a slider stays smooth on the Pi.
-const REDRAW_KEYS = ['sauron', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
+const REDRAW_KEYS = ['sauron', 'turkey', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
 let rebuildTimer = null;
 function applySettings(values) {
   const next = { ...BASE, ...values };
@@ -108,6 +108,7 @@ function resize() {
   vignette.addColorStop(0.7, 'rgba(0,0,0,0.35)');
   vignette.addColorStop(1, 'rgba(0,0,0,0.9)');
   if (C.sauron) makeSauron();
+  if (C.turkey) makeTurkey();
 }
 
 function makeSclera() {
@@ -413,6 +414,344 @@ function drawSauron(now, ox, oy, squash, ang, shut) {
 }
 
 // ---------------------------------------------------------------------------
+// Turkey style (setting "turkey"): a round, cartoony turkey standing in the window.
+// It watches people with big eyes, walks along beside them, fans its tail when
+// someone shows up, wanders and pecks when nobody's there, and works its beak
+// when the voice talks. Body, feathers and wings are pre-drawn once.
+// Sizes are in eyeball radii (R), so the eye's size/position settings fit it too.
+// ---------------------------------------------------------------------------
+const TK_FEATHER_COLORS = ['#e8553a', '#f39a2b', '#f7c948'];   // tail fan, repeating
+const TK_INNER_COLOR = '#c46a32';                              // the shorter row in front
+const TK_PECK_MS = 1600, TK_GOBBLE_MS = 900;
+const TK_LINE = '#3a2213';    // outline around everything
+const TK_BROWN = '#8b5a36', TK_HEAD = '#a06a42', TK_BELLY = '#e2b07c';
+const TK_BEAK = '#ffb02e', TK_RED = '#e8423f', TK_LEGS = '#f5a33a';
+let tkFeatherTex = null, tkInnerTex = null, tkBodyTex = null, tkWingTex = null, tkGlow = null;
+const tk = {
+  x: 0, vel: 0, goal: 0, phase: 0, fan: 0.45, hop: 0,   // x, vel, goal in R; phase = walk cycle
+  lean: 0,                                              // 0..1, how far it's leaning in to watch someone
+  nextWander: 0, peckStart: -1e9, gobbleStart: -1e9, watching: false,
+  sway: 0, swayVel: 0, lastHx: 0,                       // wattle pendulum
+  head: { x: 0, y: 0, tilt: 0, drop: 0, zoom: 1, beak: 0 },
+};
+
+function makeTurkey() {
+  tkFeatherTex = TK_FEATHER_COLORS.map(c => makeTurkeyFeather(c, 0.25));
+  tkInnerTex = makeTurkeyFeather(TK_INNER_COLOR, 0.2);
+  tkBodyTex = makeTurkeyBody();
+  tkWingTex = makeTurkeyWing();
+  // A warm glow behind it, like a lit room
+  tkGlow = ctx.createRadialGradient(cx, cy + R * 0.1, R * 0.05, cx, cy, R);
+  tkGlow.addColorStop(0, 'rgba(160,80,25,0.6)');
+  tkGlow.addColorStop(0.6, 'rgba(80,32,10,0.45)');
+  tkGlow.addColorStop(1, 'rgba(20,6,2,0.25)');
+}
+
+// A blank canvas sized in R, with a function to outline a shape in the cartoon line.
+function tkCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(w * R); c.height = Math.ceil(h * R);
+  const g = c.getContext('2d');
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  return [c, g];
+}
+
+// One fat, rounded tail feather pointing up, quill at the bottom.
+function makeTurkeyFeather(color, width) {
+  const L = 0.7, lw = 0.014 * R;
+  const [c, g] = tkCanvas(width, L);
+  const w = c.width, h = c.height, p = lw;
+  const shape = new Path2D();
+  shape.moveTo(w / 2, h - p);
+  shape.bezierCurveTo(p - w * 0.05, h * 0.65, p, p, w / 2, p);
+  shape.bezierCurveTo(w - p, p, w - p + w * 0.05, h * 0.65, w / 2, h - p);
+  g.fillStyle = color;
+  g.fill(shape);
+  // a lighter stripe down the middle
+  g.save();
+  g.clip(shape);
+  g.fillStyle = 'rgba(255,255,255,0.25)';
+  g.beginPath(); g.ellipse(w / 2, h * 0.32, w * 0.18, h * 0.24, 0, 0, Math.PI * 2); g.fill();
+  g.restore();
+  g.strokeStyle = TK_LINE; g.lineWidth = lw;
+  g.stroke(shape);
+  return c;
+}
+
+// Round body with a pale belly.
+function makeTurkeyBody() {
+  const rx = 0.3, ry = 0.31, lw = 0.014 * R;
+  const [c, g] = tkCanvas(rx * 2 + 0.04, ry * 2 + 0.04);
+  const mx = c.width / 2, my = c.height / 2;
+  g.beginPath(); g.ellipse(mx, my, rx * R, ry * R, 0, 0, Math.PI * 2);
+  g.fillStyle = TK_BROWN; g.fill();
+  g.save(); g.clip();
+  g.fillStyle = TK_BELLY;
+  g.beginPath(); g.ellipse(mx, my + 0.08 * R, 0.19 * R, 0.21 * R, 0, 0, Math.PI * 2); g.fill();
+  // little feather "v" marks on the belly
+  g.strokeStyle = 'rgba(160,100,50,0.7)'; g.lineWidth = lw * 0.8;
+  for (const [x, y] of [[-0.07, 0.04], [0.07, 0.04], [0, 0.11], [-0.07, 0.18], [0.07, 0.18]]) {
+    g.beginPath(); g.arc(mx + x * R, my + y * R, 0.035 * R, Math.PI * 0.2, Math.PI * 0.8); g.stroke();
+  }
+  // soft shine, top left
+  g.fillStyle = 'rgba(255,255,255,0.15)';
+  g.beginPath(); g.ellipse(mx - 0.12 * R, my - 0.15 * R, 0.08 * R, 0.05 * R, -0.6, 0, Math.PI * 2); g.fill();
+  g.restore();
+  g.strokeStyle = TK_LINE; g.lineWidth = lw;
+  g.beginPath(); g.ellipse(mx, my, rx * R, ry * R, 0, 0, Math.PI * 2); g.stroke();
+  return c;
+}
+
+// A little wing hanging from the shoulder (top), with a scalloped tip.
+function makeTurkeyWing() {
+  const lw = 0.014 * R;
+  const [c, g] = tkCanvas(0.2, 0.3);
+  const w = c.width, h = c.height, p = lw;
+  const s = new Path2D();
+  s.moveTo(w / 2, p);
+  s.bezierCurveTo(w - p, p, w - p, h * 0.6, w * 0.78, h * 0.86);
+  s.arc(w * 0.66, h * 0.86, w * 0.12, 0, Math.PI);
+  s.arc(w * 0.42, h * 0.88, w * 0.12, 0, Math.PI);
+  s.bezierCurveTo(w * 0.15, h * 0.75, p, h * 0.5, p, h * 0.3);
+  s.bezierCurveTo(p, p * 2, w * 0.3, p, w / 2, p);
+  g.fillStyle = '#6e4227'; g.fill(s);
+  g.strokeStyle = TK_LINE; g.lineWidth = lw; g.stroke(s);
+  return c;
+}
+
+function updateTurkey(now, dt, tracking) {
+  // The turkey never naps: if the eye was dozing when it got switched on, wake up
+  if (mood === 'drowsy' || mood === 'asleep') setMood('awake', now);
+  const watching = tracking || manualAim;
+  const range = C.turkeyWalk;
+  if (watching && !tk.watching) { tk.gobbleStart = now; tk.peckStart = -1e9; }   // someone's here: gobble!
+  tk.watching = watching;
+
+  // Where to walk: along beside the person (only once they've gone a fair way, so it
+  // doesn't shuffle back and forth), or with nobody around, somewhere new now and then.
+  if (watching) {
+    const want = clamp(look.x, -1, 1) * range;
+    if (Math.abs(want - tk.goal) > range * 0.35) tk.goal = want;
+  } else if (now >= tk.nextWander && mood === 'awake' && !override) {
+    tk.nextWander = now + rand(3, 8) * 1000;
+    const r = Math.random();
+    if (r < 0.45) tk.goal = rand(-range, range);
+    else if (r < 0.8) { tk.peckStart = now; tk.goal = tk.x; }
+  }
+  tk.goal = clamp(tk.goal, -range, range);
+  const pecking = now - tk.peckStart < TK_PECK_MS;
+  const diff = tk.goal - tk.x;
+  const speed = pecking ? 0 : Math.sign(diff) * Math.min(0.18, Math.abs(diff) * 2.5);
+  tk.vel += (speed - tk.vel) * (1 - Math.exp(-dt * 6));
+  tk.x += tk.vel * dt;
+  tk.phase += Math.abs(tk.vel) * dt / 0.07 * Math.PI;   // one step per 0.07 R walked
+
+  // Tail: fanned out wide for visitors, half open while idle
+  const fanGoal = watching ? 1 : 0.45;
+  const fanSpeed = now < snapUntil ? 20 : watching ? 5 : 1.2;
+  tk.fan += (fanGoal - tk.fan) * (1 - Math.exp(-dt * fanSpeed));
+  tk.hop = now < snapUntil ? Math.sin((snapUntil - now) / 500 * Math.PI) * 0.07 : 0;   // startled jump
+
+  // Head: turns and tilts toward where it's looking, bobs down when pecking,
+  // shakes when it gobbles.
+  let drop = 0;
+  if (pecking) {
+    const p = (now - tk.peckStart) / TK_PECK_MS;
+    drop = Math.max(drop, Math.sin(Math.PI * p) * (0.75 + 0.25 * Math.cos(p * Math.PI * 8)));
+  }
+  let shake = 0, gobble = 0;
+  const gp = (now - tk.gobbleStart) / TK_GOBBLE_MS;
+  if (gp >= 0 && gp < 1) { shake = Math.sin(gp * Math.PI * 9) * (1 - gp); gobble = Math.sin(gp * Math.PI * 5) ** 2 * (1 - gp); }
+  if (talking('laugh')) shake += Math.sin(now / 45) * 0.5 * C.talkJiggle * (0.4 + talkLevel);
+  // Watching someone, it leans in: bends its body toward them and pushes its head
+  // out (bigger, as if coming closer) and down toward people below the window.
+  tk.lean += ((watching ? 1 : 0) - tk.lean) * (1 - Math.exp(-dt * 3));
+  const lean = tk.lean, down = clamp(look.y + 0.4, 0, 1.2);
+  const walk = clamp(Math.abs(tk.vel) / 0.08, 0, 1);
+  const hx = look.x * (0.06 + 0.12 * lean) + shake * 0.025 + Math.sign(tk.vel) * walk * 0.02;
+  tk.head = { x: hx, y: look.y * (0.03 + 0.08 * lean) + 0.05 * lean * down + drop * 0.14,
+              tilt: look.x * (0.18 + 0.2 * lean) + shake * 0.15, drop,
+              zoom: 1 + 0.18 * lean * down,
+              beak: Math.min(1, Math.max(talkLevel * C.talkPulse, gobble * 0.8)) };
+  // The wattle swings like a pendulum when the head moves
+  const hv = (hx - tk.lastHx) / Math.max(dt, 1e-3);
+  tk.lastHx = hx;
+  tk.swayVel += (-tk.sway * 70 - tk.swayVel * 5 - hv * 25) * dt;
+  tk.sway = clamp(tk.sway + tk.swayVel * dt, -0.8, 0.8);
+}
+
+// The tail fan, drawn around the current origin (the base of the tail), center feather on top.
+function drawTurkeyFan(now, L, spread, n, texs) {
+  const mid = (n - 1) / 2;
+  const order = [...Array(n).keys()].sort((a, b) => Math.abs(b - mid) - Math.abs(a - mid));
+  for (const i of order) {
+    const t = texs[i % texs.length], w = t.width * L / t.height;
+    ctx.save();
+    ctx.rotate((i / (n - 1) - 0.5) * spread + Math.sin(now / 700 + i * 1.7) * 0.012);
+    ctx.drawImage(t, -w / 2, -L, w, L);
+    ctx.restore();
+  }
+}
+
+// One big cartoon eye, in head units. px, py = where the pupil has moved to.
+function drawTurkeyEye(ex, ey, rx, ry, px, py, upper, lower) {
+  const lw = 0.012;
+  ctx.save();
+  ctx.beginPath(); ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.clip();
+  const pr = rx * 0.68, x = ex + px, y = ey + py;
+  ctx.fillStyle = '#1a0f08';
+  ctx.beginPath(); ctx.arc(x, y, pr, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff';   // two sparkles
+  ctx.beginPath(); ctx.arc(x - pr * 0.35, y - pr * 0.4, pr * 0.32, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(x + pr * 0.35, y + pr * 0.35, pr * 0.14, 0, Math.PI * 2); ctx.fill();
+  // eyelids: skin coming down from the top and up from the bottom
+  const top = upper * ry * 1.2, bottom = lower * ry * 0.85;
+  ctx.fillStyle = TK_HEAD;
+  if (top > 0) ctx.fillRect(ex - rx, ey - ry, rx * 2, top);
+  if (bottom > 0) ctx.fillRect(ex - rx, ey + ry - bottom, rx * 2, bottom);
+  ctx.restore();
+  ctx.strokeStyle = TK_LINE; ctx.lineWidth = lw;
+  if (upper > 0.9) {
+    // shut: a happy curved line instead of the eye
+    ctx.beginPath(); ctx.ellipse(ex, ey, rx * 0.85, ry * 0.45, 0, Math.PI * 0.1, Math.PI * 0.9); ctx.stroke();
+    return;
+  }
+  ctx.beginPath(); ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2); ctx.stroke();
+  if (top > ry * 0.15) {   // the lid's edge
+    const yy = ey - ry + top, half = rx * Math.sqrt(Math.max(0, 1 - ((yy - ey) / ry) ** 2));
+    ctx.beginPath(); ctx.moveTo(ex - half, yy); ctx.lineTo(ex + half, yy); ctx.stroke();
+  }
+}
+
+// Fill and outline the current path in the cartoon style.
+function tkInk(fill, lw) {
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = TK_LINE; ctx.lineWidth = lw; ctx.stroke();
+}
+
+function drawTurkey(now, narrow) {
+  const u = R, h = tk.head, lw = 0.014 * u;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
+  ctx.fillStyle = tkGlow;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+  // Walking: a bouncy waddle, squashing a little on each step
+  const walk = clamp(Math.abs(tk.vel) / 0.08, 0, 1), dir = Math.sign(tk.vel);
+  const gx = cx + tk.x * u, gy = cy + 0.6 * u;   // the ground between its feet
+  const bounce = Math.abs(Math.sin(tk.phase)) * 0.03 * walk;
+  const bx = gx, by = gy - u * (0.4 + tk.hop + bounce);
+  const bend = tk.lean * clamp(look.y + 0.4, 0, 1.2);   // leaning in toward someone below
+  const rock = Math.sin(tk.phase) * 0.08 * walk + clamp(look.x, -1, 1) * 0.2 * tk.lean;
+  const squash = 1 + 0.025 * Math.sin(now / 650) + 0.04 * (bounce / 0.03 - 0.5) * walk   // breathing + bounce
+               - 0.07 * bend;                                                          // hunched over
+  const atBody = () => { ctx.translate(bx, by); ctx.rotate(rock); };
+
+  ctx.fillStyle = 'rgba(0,0,0,0.4)';
+  ctx.beginPath(); ctx.ellipse(gx, gy + u * 0.01, u * 0.28 * (1 - tk.hop * 3), u * 0.04, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Tail fan, trailing a little behind when it walks
+  ctx.save();
+  atBody();
+  ctx.translate(-dir * walk * 0.03 * u, -0.04 * u);
+  const L = u * 0.78 * (0.5 + 0.5 * tk.fan), spread = 1.2 + 1.8 * tk.fan;
+  drawTurkeyFan(now, L, spread, 11, tkFeatherTex);
+  drawTurkeyFan(now, L * 0.66, spread * 0.88, 9, [tkInnerTex]);
+  ctx.restore();
+
+  // Short legs with round little toes; each foot lifts in turn
+  for (const s of [-1, 1]) {
+    const ph = tk.phase + (s > 0 ? Math.PI : 0);
+    const up = Math.max(0, Math.sin(ph)) * walk;
+    const fx = gx + s * 0.09 * u + Math.cos(ph) * 0.02 * u * walk * dir;
+    const fy = gy - up * 0.05 * u - tk.hop * u * 0.8;
+    const leg = () => {
+      ctx.beginPath(); ctx.moveTo(bx + s * 0.09 * u, by + 0.2 * u); ctx.lineTo(fx, fy);
+      for (const a of [-0.8, 0, 0.8]) {
+        const ta = a * (1 - 0.5 * up) + s * 0.15, len = u * 0.05 * (1 - 0.3 * up);
+        ctx.moveTo(fx, fy); ctx.lineTo(fx + Math.sin(ta) * len, fy + Math.cos(ta) * len * 0.5);
+      }
+    };
+    leg(); ctx.strokeStyle = TK_LINE; ctx.lineWidth = u * 0.045; ctx.stroke();   // outline...
+    leg(); ctx.strokeStyle = TK_LEGS; ctx.lineWidth = u * 0.045 - lw * 2; ctx.stroke();   // ...then color
+  }
+
+  ctx.save();
+  atBody();
+  // Wings, behind the body's edge: held out when fanned, flapping when startled or gobbling
+  const flap = tk.hop * 6 + (tk.head.beak > 0.3 && tk.watching ? 0.1 : 0);
+  for (const s of [-1, 1]) {
+    ctx.save();
+    ctx.translate(s * 0.25 * u, -0.1 * u);
+    ctx.rotate(-s * (0.25 + 0.2 * tk.fan + flap));
+    ctx.scale(s, 1);
+    ctx.drawImage(tkWingTex, -tkWingTex.width / 2, 0);
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.scale(1 / squash, squash);
+  ctx.drawImage(tkBodyTex, -tkBodyTex.width / 2, -tkBodyTex.height / 2);
+  ctx.restore();
+
+  // Head: big and round, sitting right on the body
+  ctx.translate(h.x * u, (-0.36 + h.y) * u - (squash - 1) * 0.3 * u);
+  ctx.rotate(h.tilt);
+  ctx.scale(u * 1.2 * h.zoom, u * 1.2 * h.zoom);   // the head is drawn in R units from here on (a bit oversized, for cuteness)
+  const hl = 0.012;
+  // Wattle, swinging from under the beak (drawn first so the head overlaps its top)
+  ctx.save();
+  ctx.translate(0.04, 0.06);
+  ctx.rotate(tk.sway - h.tilt * 0.7);
+  ctx.beginPath();
+  ctx.moveTo(-0.018, 0);
+  ctx.bezierCurveTo(-0.035, 0.07, -0.03, 0.13, 0, 0.13);
+  ctx.bezierCurveTo(0.03, 0.13, 0.035, 0.07, 0.018, 0);
+  ctx.closePath();
+  tkInk(TK_RED, hl);
+  ctx.restore();
+  // Tuft of three little feathers on top
+  for (const [a, len] of [[-0.35, 0.06], [0, 0.075], [0.35, 0.06]]) {
+    ctx.save();
+    ctx.translate(0, -0.15); ctx.rotate(a + Math.sin(now / 500 + a * 5) * 0.06);
+    ctx.beginPath(); ctx.ellipse(0, -len / 2, 0.016, len / 2, 0, 0, Math.PI * 2);
+    tkInk(TK_FEATHER_COLORS[a === 0 ? 0 : 1], hl);
+    ctx.restore();
+  }
+  ctx.beginPath(); ctx.ellipse(0, 0, 0.16, 0.155, 0, 0, Math.PI * 2);
+  tkInk(TK_HEAD, hl);
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.beginPath(); ctx.ellipse(-0.06, -0.08, 0.05, 0.03, -0.5, 0, Math.PI * 2); ctx.fill();
+  // Rosy cheeks
+  ctx.fillStyle = 'rgba(255,120,130,0.55)';
+  for (const s of [-1, 1]) { ctx.beginPath(); ctx.ellipse(s * 0.1, 0.055, 0.03, 0.019, 0, 0, Math.PI * 2); ctx.fill(); }
+  // Eyes (they follow people; lids blink and droop with the eye's moods)
+  const upper = Math.max(lids.upper, blink, narrow), lower = Math.max(lids.lower, blink, narrow * 0.6);
+  const px = look.x * 0.018, py = clamp(look.y + h.drop * 0.8, -1, 1) * 0.02;
+  drawTurkeyEye(-0.058, -0.025, 0.046, 0.058, px, py, upper, lower);
+  drawTurkeyEye(0.058, -0.025, 0.046, 0.058, px, py, upper, lower);
+  // Beak: the lower half drops open on each syllable
+  const o = h.beak;
+  if (o > 0.05) {
+    ctx.beginPath(); ctx.moveTo(-0.022, 0.045); ctx.quadraticCurveTo(0, 0.08 + 0.05 * o, 0.022, 0.045); ctx.closePath();
+    tkInk('#7a1e1e', hl);
+  }
+  ctx.beginPath(); ctx.moveTo(-0.024, 0.05); ctx.quadraticCurveTo(0, 0.1 + 0.055 * o, 0.024, 0.05); ctx.closePath();
+  tkInk('#e8901e', hl);
+  ctx.beginPath(); ctx.moveTo(-0.036, 0.03);
+  ctx.quadraticCurveTo(-0.03, 0.005, 0, 0.005); ctx.quadraticCurveTo(0.03, 0.005, 0.036, 0.03);
+  ctx.quadraticCurveTo(0.015, 0.06, 0, 0.085); ctx.quadraticCurveTo(-0.015, 0.06, -0.036, 0.03);
+  tkInk(TK_BEAK, hl);
+  ctx.restore();
+
+  ctx.fillStyle = vignette;
+  ctx.fillRect(cx - R, cy - R, R * 2, R * 2);
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 const look = { x: 0, y: 0 };      // where the eye is pointing now (-1..1 disc)
@@ -675,6 +1014,11 @@ function draw() {
   const ang = Math.atan2(oy, ox);
   const narrow = talking('whisper') ? 0.32 : 0;   // narrowed, conspiratorial lids while whispering
 
+  if (C.turkey && tkBodyTex) {   // (just switched on: the eye shows until the turkey is drawn)
+    drawTurkey(performance.now(), narrow);
+    if (C.showGuide) drawGuide();
+    return;
+  }
   if (C.sauron) {
     // Lidless: how "shut" it would be sets how low the fire burns and how thin the slit gets
     drawSauron(performance.now(), ox, oy, squash, ang, Math.max(lids.upper, narrow));
@@ -786,7 +1130,7 @@ function updateHud(now) {
     `mood:      ${mood}${manualAim ? ' (phone aiming)' : ''}\n` +
     `look:      ${look.x.toFixed(2)}, ${look.y.toFixed(2)}\n` +
     `last msg:  ${lastMsg ? JSON.stringify(lastMsg) : '-'}\n` +
-    `iris hue:  ${C.sauron ? '- (Eye of Sauron)' : Math.round(currentHue(now))}\n` +
+    `iris hue:  ${C.turkey ? `- (turkey at ${tk.x.toFixed(2)})` : C.sauron ? '- (Eye of Sauron)' : Math.round(currentHue(now))}\n` +
     `fps:       ${fps}\n` +
     `keys: D=debug  B=blink  F=fullscreen\n` +
     `      S=sleep  W=startle  R=eye roll  T=double-take`;
@@ -822,7 +1166,7 @@ const talking = cue => talk && talk.cues.includes(cue) && performance.now() >= t
 // Trigger a reaction on demand (test buttons, phone page, or keyboard).
 function react(action) {
   const now = performance.now();
-  if (action === 'sleep') fallAsleep(now, 20);
+  if (action === 'sleep' && !C.turkey) fallAsleep(now, 20);   // the turkey never naps
   if (action === 'startle') startle(now);
   if (action === 'roll') startEyeRoll(now);
   if (action === 'doubletake') startDoubleTake(now);
@@ -854,6 +1198,7 @@ function frame(now) {
   updateBlink(now);
   updateTalk(now, dt);
   tracking = updateLook(now, dt);
+  if (C.turkey) updateTurkey(now, dt, tracking);
   draw();
   updateHud(now);
 }

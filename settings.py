@@ -26,6 +26,12 @@ SCHEMA = [
     {"key": "sauron", "group": "Look", "label": "Eye of Sauron", "kind": "toggle",
      "help": "Swaps the eyeball for a lidless eye wreathed in flame, with a slit pupil. "
              "Turn off to go back to the normal eye. The color, white-of-the-eye and vein settings only change the normal eye."},
+    {"key": "turkey", "group": "Look", "label": "Turkey", "kind": "toggle",
+     "help": "Swaps the eye for a whole turkey that watches people, walks along beside them, "
+             "fans its tail when someone shows up, and pecks around when nobody's there. "
+             "Wins over Eye of Sauron if both are on. Size and position use the Position & size settings."},
+    {"key": "turkeyWalk", "group": "Look", "label": "Turkey: how far it walks", "kind": "range",
+     "min": 0, "max": 0.35, "step": 0.01, "help": "How far left and right of center it may wander. 0 = stays put."},
     {"key": "irisSize", "group": "Look", "label": "Iris size", "kind": "range", "min": 0.25, "max": 0.6, "step": 0.01},
     {"key": "pupilSize", "group": "Look", "label": "Pupil size", "kind": "range", "min": 0.2, "max": 0.7, "step": 0.01},
     {"key": "scleraBrightness", "group": "Look", "label": "White of the eye brightness", "kind": "range",
