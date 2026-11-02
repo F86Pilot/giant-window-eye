@@ -9,6 +9,10 @@ and then, and slowly shifts through the colors of the rainbow. Optionally it als
 by ElevenLabs on a speaker in the yard, with the eye pulsing in time with the words),
 and **records a short clip of each visit** with what it said.
 
+After Halloween, a tap on the phone page swaps the eye for **a cartoon turkey** that
+watches people, leans in toward them, waddles along beside them and fans its tail (it
+never naps the way the eye does). There's also a fiery **Eye of Sauron**.
+
 <p align="center">
   <img src="docs/house-at-dusk.jpg" alt="The eye glowing green in a round upstairs window at dusk" width="520">
 </p>
@@ -217,7 +221,7 @@ Open `http://<tracker-computer-ip>:8085/calibrate`:
   that watches people, walks along beside them and fans its tail) and which voice talks; then
   look and movement (position and size, with an alignment guide; look; color; movement;
   blinking; moods; how it moves while talking), showing only what applies to the chosen
-  character; the voice (lines, Claude model, when to talk, cost limit) and recordings.
+  character (the turkey adds its own size, where its feet are, and how far it walks); the voice (lines, Claude model, when to talk, cost limit) and recordings.
   Changes take effect instantly and are saved.
 - **Recordings:** watch, save or delete clips; filter to people who *stopped to look*.
 - **Aim:** stand in the yard, drag the eye until it looks right at you, and tap
@@ -247,6 +251,10 @@ slow anything down and uses the same single camera connection.
 - **Mounting the TV.** Ours hangs inside a closet behind the window. Two wood strips
   bolted to the TV's mounting holes and cord to hooks in the wall hold it against the
   window; *Move left / right* on the phone page lines the eye up with the glass.
+- **Bars across the window.** Ours has a cross through the middle, which hid the
+  turkey's face. Making the turkey bigger than the window (*Turkey size* around 1.9, cropped
+  by the frame) with its feet near the bottom (*Where its feet are* around 0.97) puts its
+  face up in the top half, clear of the bars.
 
   <img src="docs/tv-mount.jpg" alt="Back of the TV hung in a closet with two wood strips and cord" width="300">
 
