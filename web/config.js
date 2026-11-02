@@ -11,6 +11,8 @@ window.EYE_CONFIG = {
   // Who's in the window: "eye" (the giant eyeball), "sauron" (Eye of Sauron: fire and a
   // slit pupil) or "turkey" (a cartoon turkey that watches and walks around)
   character: "eye",
+  turkeySize: 1.9,         // turkey size: 1 = fits the circle, bigger gets cropped by the window
+  turkeyFeet: 0.97,        // where the turkey stands: how far below center (1 = bottom of the circle)
   turkeyWalk: 0.2,         // how far the turkey may walk left/right of center (0 = stays put, 0.35 = most)
   // Iris color: 0=red, 22=orange, 45=gold, 120=green, 200=blue, 280=purple, 360=red again
   hueDrift: true,          // slowly change color over time (false = always irisHue)

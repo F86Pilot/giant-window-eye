@@ -30,6 +30,10 @@ SCHEMA = [
      "min": 0.4, "max": 1.3, "step": 0.01, "help": "1 = the circle touches the top and bottom of the screen."},
 
     # Look
+    {"key": "turkeySize", "group": "Look", "label": "Turkey size", "kind": "range", "only": ["turkey"],
+     "min": 0.8, "max": 2.2, "step": 0.05, "help": "1 = fits inside the circle. Bigger gets cropped by the window, like it's pressed up close."},
+    {"key": "turkeyFeet", "group": "Look", "label": "Where its feet are", "kind": "range", "only": ["turkey"],
+     "min": 0.3, "max": 1.1, "step": 0.01, "help": "How far below the center it stands. 1 = the bottom of the circle."},
     {"key": "turkeyWalk", "group": "Look", "label": "How far it walks", "kind": "range", "only": ["turkey"],
      "min": 0, "max": 0.35, "step": 0.01, "help": "How far left and right of center it may wander. 0 = stays put."},
     {"key": "irisSize", "group": "Look", "label": "Iris size", "kind": "range", "only": EYES,

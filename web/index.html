@@ -41,7 +41,7 @@
 // ---------------------------------------------------------------------------
 const C = Object.assign({
   irisHue: 22, hueDrift: true, hueFrom: 0, hueTo: 45, hueCycleMinutes: 10,
-  character: 'eye', turkeyWalk: 0.2, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
+  character: 'eye', turkeyWalk: 0.2, turkeySize: 1.9, turkeyFeet: 0.97, irisSize: 0.42, pupilSize: 0.40, scleraBrightness: 0.75, veins: true,
   eyeScale: 0.96, eyeShiftX: 0, eyeShiftY: 0,
   maxTravel: 0.45, smoothing: 5, idleAfterSec: 2.5, idleUpMost: 0.4, idleDownMost: 0.05, blinkMinSec: 2.5, blinkMaxSec: 7,
   moods: true, drowsySec: 6,
@@ -55,7 +55,7 @@ const BASE = { ...C };   // config.js values; settings from the phone page go on
 // Settings changed on the phone page. Most take effect on the next frame; ones
 // that change the pre-drawn images (size, position, look) rebuild them, at most
 // a few times a second so dragging a slider stays smooth on the Pi.
-const REDRAW_KEYS = ['character', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
+const REDRAW_KEYS = ['character', 'turkeySize', 'eyeScale', 'eyeShiftX', 'eyeShiftY', 'irisSize', 'scleraBrightness', 'veins'];
 let rebuildTimer = null;
 function applySettings(values) {
   const next = { ...BASE, ...values };
@@ -418,7 +418,8 @@ function drawSauron(now, ox, oy, squash, ang, shut) {
 // It watches people with big eyes, walks along beside them, fans its tail when
 // someone shows up, wanders and pecks when nobody's there, and works its beak
 // when the voice talks. Body, feathers and wings are pre-drawn once.
-// Sizes are in eyeball radii (R), so the eye's size/position settings fit it too.
+// Sizes are in TU (R times the turkey size setting); where it stands and walks is in R,
+// so the window's size/position settings fit it too. Too big for the window is fine: it gets cropped.
 // ---------------------------------------------------------------------------
 const TK_FEATHER_COLORS = ['#e8553a', '#f39a2b', '#f7c948'];   // tail fan, repeating
 const TK_INNER_COLOR = '#c46a32';                              // the shorter row in front
@@ -426,6 +427,7 @@ const TK_PECK_MS = 1600, TK_GOBBLE_MS = 900;
 const TK_LINE = '#3a2213';    // outline around everything
 const TK_BROWN = '#8b5a36', TK_HEAD = '#a06a42', TK_BELLY = '#e2b07c';
 const TK_BEAK = '#ffb02e', TK_RED = '#e8423f', TK_LEGS = '#f5a33a';
+let TU = 0;   // the turkey's own size unit: R times the turkey size setting
 let tkFeatherTex = null, tkInnerTex = null, tkBodyTex = null, tkWingTex = null, tkGlow = null;
 const tk = {
   x: 0, vel: 0, goal: 0, phase: 0, fan: 0.45, hop: 0,   // x, vel, goal in R; phase = walk cycle
@@ -436,6 +438,7 @@ const tk = {
 };
 
 function makeTurkey() {
+  TU = R * C.turkeySize;
   tkFeatherTex = TK_FEATHER_COLORS.map(c => makeTurkeyFeather(c, 0.25));
   tkInnerTex = makeTurkeyFeather(TK_INNER_COLOR, 0.2);
   tkBodyTex = makeTurkeyBody();
@@ -447,10 +450,10 @@ function makeTurkey() {
   tkGlow.addColorStop(1, 'rgba(20,6,2,0.25)');
 }
 
-// A blank canvas sized in R, with a function to outline a shape in the cartoon line.
+// A blank canvas sized in TU, with a function to outline a shape in the cartoon line.
 function tkCanvas(w, h) {
   const c = document.createElement('canvas');
-  c.width = Math.ceil(w * R); c.height = Math.ceil(h * R);
+  c.width = Math.ceil(w * TU); c.height = Math.ceil(h * TU);
   const g = c.getContext('2d');
   g.lineJoin = 'round'; g.lineCap = 'round';
   return [c, g];
@@ -458,7 +461,7 @@ function tkCanvas(w, h) {
 
 // One fat, rounded tail feather pointing up, quill at the bottom.
 function makeTurkeyFeather(color, width) {
-  const L = 0.7, lw = 0.014 * R;
+  const L = 0.7, lw = 0.014 * TU;
   const [c, g] = tkCanvas(width, L);
   const w = c.width, h = c.height, p = lw;
   const shape = new Path2D();
@@ -480,31 +483,31 @@ function makeTurkeyFeather(color, width) {
 
 // Round body with a pale belly.
 function makeTurkeyBody() {
-  const rx = 0.3, ry = 0.31, lw = 0.014 * R;
+  const rx = 0.3, ry = 0.31, lw = 0.014 * TU;
   const [c, g] = tkCanvas(rx * 2 + 0.04, ry * 2 + 0.04);
   const mx = c.width / 2, my = c.height / 2;
-  g.beginPath(); g.ellipse(mx, my, rx * R, ry * R, 0, 0, Math.PI * 2);
+  g.beginPath(); g.ellipse(mx, my, rx * TU, ry * TU, 0, 0, Math.PI * 2);
   g.fillStyle = TK_BROWN; g.fill();
   g.save(); g.clip();
   g.fillStyle = TK_BELLY;
-  g.beginPath(); g.ellipse(mx, my + 0.08 * R, 0.19 * R, 0.21 * R, 0, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(mx, my + 0.08 * TU, 0.19 * TU, 0.21 * TU, 0, 0, Math.PI * 2); g.fill();
   // little feather "v" marks on the belly
   g.strokeStyle = 'rgba(160,100,50,0.7)'; g.lineWidth = lw * 0.8;
   for (const [x, y] of [[-0.07, 0.04], [0.07, 0.04], [0, 0.11], [-0.07, 0.18], [0.07, 0.18]]) {
-    g.beginPath(); g.arc(mx + x * R, my + y * R, 0.035 * R, Math.PI * 0.2, Math.PI * 0.8); g.stroke();
+    g.beginPath(); g.arc(mx + x * TU, my + y * TU, 0.035 * TU, Math.PI * 0.2, Math.PI * 0.8); g.stroke();
   }
   // soft shine, top left
   g.fillStyle = 'rgba(255,255,255,0.15)';
-  g.beginPath(); g.ellipse(mx - 0.12 * R, my - 0.15 * R, 0.08 * R, 0.05 * R, -0.6, 0, Math.PI * 2); g.fill();
+  g.beginPath(); g.ellipse(mx - 0.12 * TU, my - 0.15 * TU, 0.08 * TU, 0.05 * TU, -0.6, 0, Math.PI * 2); g.fill();
   g.restore();
   g.strokeStyle = TK_LINE; g.lineWidth = lw;
-  g.beginPath(); g.ellipse(mx, my, rx * R, ry * R, 0, 0, Math.PI * 2); g.stroke();
+  g.beginPath(); g.ellipse(mx, my, rx * TU, ry * TU, 0, 0, Math.PI * 2); g.stroke();
   return c;
 }
 
 // A little wing hanging from the shoulder (top), with a scalloped tip.
 function makeTurkeyWing() {
-  const lw = 0.014 * R;
+  const lw = 0.014 * TU;
   const [c, g] = tkCanvas(0.2, 0.3);
   const w = c.width, h = c.height, p = lw;
   const s = new Path2D();
@@ -632,7 +635,7 @@ function tkInk(fill, lw) {
 }
 
 function drawTurkey(now, narrow) {
-  const u = R, h = tk.head, lw = 0.014 * u;
+  const u = TU, h = tk.head, lw = 0.014 * u;
   ctx.save();
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
   ctx.fillStyle = tkGlow;
@@ -641,7 +644,7 @@ function drawTurkey(now, narrow) {
 
   // Walking: a bouncy waddle, squashing a little on each step
   const walk = clamp(Math.abs(tk.vel) / 0.08, 0, 1), dir = Math.sign(tk.vel);
-  const gx = cx + tk.x * u, gy = cy + 0.6 * u;   // the ground between its feet
+  const gx = cx + tk.x * R, gy = cy + C.turkeyFeet * R;   // the ground between its feet
   const bounce = Math.abs(Math.sin(tk.phase)) * 0.03 * walk;
   const bx = gx, by = gy - u * (0.4 + tk.hop + bounce);
   const bend = tk.lean * clamp(look.y + 0.4, 0, 1.2);   // leaning in toward someone below
